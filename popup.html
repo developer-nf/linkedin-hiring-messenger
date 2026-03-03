@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LinkedIn Hiring Messenger</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="container">
+      <header class="header">
+        <h1>Hiring Messenger</h1>
+        <p>Use responsibly within LinkedIn terms.</p>
+      </header>
+
+      <section class="card">
+        <label for="template">Message Template</label>
+        <textarea
+          id="template"
+          rows="6"
+          placeholder="Hi {first_name}, thanks for applying for the {job_title} role..."
+        ></textarea>
+        <p class="hint">Placeholders: <code>{name}</code> <code>{first_name}</code> <code>{job_title}</code></p>
+      </section>
+
+      <section class="card">
+        <div class="toggle-row">
+          <span>Manual Review Mode</span>
+          <input id="manualMode" type="checkbox" checked />
+        </div>
+        <div class="toggle-row">
+          <span>Auto Send Mode</span>
+          <input id="autoMode" type="checkbox" />
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="status-grid">
+          <div>
+            <span class="muted">Messages sent</span>
+            <strong id="sentCount">0</strong>
+          </div>
+          <div>
+            <span class="muted">Current candidate</span>
+            <strong id="candidateName">-</strong>
+          </div>
+          <div>
+            <span class="muted">State</span>
+            <strong id="runState">Stopped</strong>
+          </div>
+        </div>
+      </section>
+
+      <section class="actions">
+        <button id="startBtn" class="btn primary">Start Messaging</button>
+        <button id="stopBtn" class="btn danger">Stop</button>
+        <button id="resetBtn" class="btn">Reset Sent List</button>
+        <button id="closeModalBtn" class="btn" title="Close the open LinkedIn message modal">Close message modal</button>
+      </section>
+    </main>
+
+    <script src="popup.js" type="module"></script>
+  </body>
+</html>
