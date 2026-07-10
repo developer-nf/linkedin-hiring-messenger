@@ -5,4 +5,4 @@
 // If you change the API host, also update host_permissions in manifest.json.
 
 export const VERIFY_NAME_URL =
-  "http://YOUR_API_HOST/zakaria/test/verify_name_by_email";
+  "http://YOUR_API_HOST/";
