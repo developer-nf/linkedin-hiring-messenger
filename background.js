@@ -1,11 +1,16 @@
+import { VERIFY_NAME_URL } from "./config.js";
+
 const DEFAULT_STATE = {
   running: false,
   status: "Stopped",
   sentCount: 0,
   currentCandidate: "-",
   mode: "manual",
+  campaignMode: "message",
   template:
     "Hi {first_name}, thanks for applying for the {job_title} role. I would love to connect and share next steps.",
+  awarenessTemplate:
+    "Hi {first_name}, thanks for applying for the {job_title} role. I wanted to share a quick awareness note and next steps.",
   sessionStartAt: 0,
   maxPerSession: 25
 };
@@ -59,7 +64,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           currentCandidate: "-",
           sessionStartAt: Date.now(),
           mode: message.payload?.mode === "auto" ? "auto" : "manual",
-          template: message.payload?.template || DEFAULT_STATE.template
+          campaignMode:
+            message.payload?.campaignMode === "awareness" ? "awareness" : "message",
+          template: message.payload?.template || DEFAULT_STATE.template,
+          awarenessTemplate:
+            message.payload?.awarenessTemplate || DEFAULT_STATE.awarenessTemplate
         };
         const state = await setState(patch);
         sendResponse({ ok: true, state });
@@ -87,6 +96,44 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         await chrome.storage.local.set({ [STORAGE_KEYS.sentMap]: {} });
         const state = await setState({ sentCount: 0, currentCandidate: "-", status: "Stopped" });
         sendResponse({ ok: true, state });
+        break;
+      }
+
+      case "VERIFY_NAME": {
+        const name = String(message.payload?.name || "").trim();
+        if (!name) {
+          sendResponse({ ok: false, isAwareness: false, error: "Missing name." });
+          break;
+        }
+
+        try {
+          const form = new FormData();
+          form.append("name", name);
+
+          const res = await fetch(VERIFY_NAME_URL, {
+            method: "POST",
+            body: form
+          });
+
+          if (!res.ok) {
+            sendResponse({
+              ok: false,
+              isAwareness: false,
+              error: `HTTP ${res.status}`
+            });
+            break;
+          }
+
+          const data = await res.json();
+          sendResponse({ ok: true, isAwareness: data?.response === true });
+        } catch (error) {
+          console.error("[LHM][background] VERIFY_NAME failed:", error);
+          sendResponse({
+            ok: false,
+            isAwareness: false,
+            error: error?.message || "VERIFY_NAME request failed."
+          });
+        }
         break;
       }
 

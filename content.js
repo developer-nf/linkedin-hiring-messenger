@@ -1304,6 +1304,25 @@
     return !isComposerStillOpen(container, dialog, editor);
   }
 
+  async function verifyNameForAwareness(applicantName) {
+    const name = String(applicantName || "").trim();
+    if (!name || name === "Candidate") return false;
+    try {
+      const res = await chrome.runtime.sendMessage({
+        type: "VERIFY_NAME",
+        payload: { name }
+      });
+      if (!res?.ok) {
+        log("VERIFY_NAME failed:", res?.error || "unknown");
+        return false;
+      }
+      return Boolean(res.isAwareness);
+    } catch (error) {
+      log("VERIFY_NAME request error:", error);
+      return false;
+    }
+  }
+
   async function processCandidate(card, index, state, sentMap) {
     assertNotStopped();
 
@@ -1324,6 +1343,22 @@
       sentMap[candidateKey] = Date.now();
       await setSentMap(sentMap);
       return { skipped: true, sent: false, profileUrl: candidateKey, cardName, reason: "message already sent" };
+    }
+
+    const isAwarenessCampaign = state.campaignMode === "awareness";
+    if (isAwarenessCampaign) {
+      const verified = await verifyNameForAwareness(cardName);
+      if (!verified) {
+        log("Awareness mode: skipping unverified name:", cardName);
+        return {
+          skipped: true,
+          sent: false,
+          profileUrl: candidateKey,
+          cardName,
+          reason: "awareness filter"
+        };
+      }
+      log("Awareness mode: verified name, will message:", cardName);
     }
 
     card.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -1463,7 +1498,18 @@
     const parsed = U.parseCandidateName(fullName);
     const firstName = deriveCandidateFirstName(cardName, parsed.name || fullName);
     const jobTitle = getJobTitleFromPanel();
-    const finalMessage = U.fillTemplate(state.template, {
+
+    const chosenTemplate = isAwarenessCampaign
+      ? state.awarenessTemplate || state.template
+      : state.template;
+    log(
+      "Campaign mode:",
+      isAwarenessCampaign ? "awareness" : "message",
+      "for",
+      fullName
+    );
+
+    const finalMessage = U.fillTemplate(chosenTemplate, {
       name: parsed.name,
       firstName,
       jobTitle
@@ -1587,8 +1633,12 @@
             sentCount += 1;
             await updateProgress({ sentCount, currentCandidate: result.cardName, status: "Sent" });
           } else if (result.skipped) {
-            const skipStatus =
-              result.reason === "existing conversation" ? "Skipped: already has messages" : "Skipped duplicate";
+            let skipStatus = "Skipped duplicate";
+            if (result.reason === "existing conversation") {
+              skipStatus = "Skipped: already has messages";
+            } else if (result.reason === "awareness filter") {
+              skipStatus = "Skipped: not in awareness list";
+            }
             await updateProgress({ currentCandidate: result.cardName, status: skipStatus });
           }
         } catch (error) {

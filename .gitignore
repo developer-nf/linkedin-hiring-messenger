@@ -1,0 +1,8 @@
+# Local API / secrets config (copy from config.example.js)
+config.js
+
+# OS / editor
+.DS_Store
+*.swp
+.idea/
+.vscode/

@@ -4,7 +4,10 @@
   "version": "1.0.0",
   "description": "Helps recruiters message LinkedIn applicants with safe, review-friendly automation.",
   "permissions": ["storage", "activeTab", "scripting"],
-  "host_permissions": ["https://www.linkedin.com/*"],
+  "host_permissions": [
+    "https://www.linkedin.com/*",
+    "http://64.227.130.94/*"
+  ],
   "background": {
     "service_worker": "background.js",
     "type": "module"
