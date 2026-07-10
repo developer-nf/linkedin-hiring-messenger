@@ -17,10 +17,32 @@
         <label for="template">Message Template</label>
         <textarea
           id="template"
-          rows="6"
+          rows="5"
           placeholder="Hi {first_name}, thanks for applying for the {job_title} role..."
         ></textarea>
-        <p class="hint">Placeholders: <code>{name}</code> <code>{first_name}</code> <code>{job_title}</code></p>
+        <p class="hint">Used in Message Mode. Placeholders: <code>{name}</code> <code>{first_name}</code> <code>{job_title}</code></p>
+      </section>
+
+      <section class="card">
+        <label for="awarenessTemplate">Awareness Template</label>
+        <textarea
+          id="awarenessTemplate"
+          rows="5"
+          placeholder="Hi {first_name}, ..."
+        ></textarea>
+        <p class="hint">Used in Awareness Mode (only when API returns true). Same placeholders as above.</p>
+      </section>
+
+      <section class="card">
+        <div class="toggle-row">
+          <span>Message Mode</span>
+          <input id="messageCampaignMode" type="checkbox" checked />
+        </div>
+        <div class="toggle-row">
+          <span>Awareness Mode</span>
+          <input id="awarenessCampaignMode" type="checkbox" />
+        </div>
+        <p class="hint">Message Mode: all applicants. Awareness Mode: only API-verified names.</p>
       </section>
 
       <section class="card">

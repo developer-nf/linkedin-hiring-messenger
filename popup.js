@@ -1,12 +1,18 @@
 const DEFAULT_TEMPLATE =
   "Hi {first_name}, thanks for applying for the {job_title} role. I would love to connect and share next steps.";
 
+const DEFAULT_AWARENESS_TEMPLATE =
+  "Hi {first_name}, thanks for applying for the {job_title} role. I wanted to share a quick awareness note and next steps.";
+
 const STORAGE_KEYS = {
   state: "lhm_state"
 };
 
 const els = {
   template: document.getElementById("template"),
+  awarenessTemplate: document.getElementById("awarenessTemplate"),
+  messageCampaignMode: document.getElementById("messageCampaignMode"),
+  awarenessCampaignMode: document.getElementById("awarenessCampaignMode"),
   manualMode: document.getElementById("manualMode"),
   autoMode: document.getElementById("autoMode"),
   sentCount: document.getElementById("sentCount"),
@@ -27,7 +33,9 @@ async function getState() {
       sentCount: 0,
       currentCandidate: "-",
       mode: "manual",
+      campaignMode: "message",
       template: DEFAULT_TEMPLATE,
+      awarenessTemplate: DEFAULT_AWARENESS_TEMPLATE,
       maxPerSession: 25
     }
   );
@@ -35,6 +43,9 @@ async function getState() {
 
 function renderState(state) {
   els.template.value = state.template || DEFAULT_TEMPLATE;
+  els.awarenessTemplate.value = state.awarenessTemplate || DEFAULT_AWARENESS_TEMPLATE;
+  els.messageCampaignMode.checked = state.campaignMode !== "awareness";
+  els.awarenessCampaignMode.checked = state.campaignMode === "awareness";
   els.manualMode.checked = state.mode !== "auto";
   els.autoMode.checked = state.mode === "auto";
   els.sentCount.textContent = String(state.sentCount || 0);
@@ -65,7 +76,7 @@ async function sendToContent(tabId, message) {
   return chrome.tabs.sendMessage(tabId, message);
 }
 
-function lockModes(changed) {
+function lockSendModes(changed) {
   if (changed === "manual" && els.manualMode.checked) {
     els.autoMode.checked = false;
   }
@@ -77,6 +88,22 @@ function lockModes(changed) {
   }
 }
 
+function lockCampaignModes(changed) {
+  if (changed === "message" && els.messageCampaignMode.checked) {
+    els.awarenessCampaignMode.checked = false;
+  }
+  if (changed === "awareness" && els.awarenessCampaignMode.checked) {
+    els.messageCampaignMode.checked = false;
+  }
+  if (!els.messageCampaignMode.checked && !els.awarenessCampaignMode.checked) {
+    els.messageCampaignMode.checked = true;
+  }
+}
+
+function getCampaignMode() {
+  return els.awarenessCampaignMode.checked ? "awareness" : "message";
+}
+
 async function startMessaging() {
   const tab = await getApplicantsTab();
   if (!tab?.id) {
@@ -85,11 +112,14 @@ async function startMessaging() {
   }
 
   const mode = els.autoMode.checked ? "auto" : "manual";
+  const campaignMode = getCampaignMode();
   const template = (els.template.value || "").trim() || DEFAULT_TEMPLATE;
+  const awarenessTemplate =
+    (els.awarenessTemplate.value || "").trim() || DEFAULT_AWARENESS_TEMPLATE;
 
   const startResponse = await chrome.runtime.sendMessage({
     type: "START_AUTOMATION",
-    payload: { mode, template }
+    payload: { mode, campaignMode, template, awarenessTemplate }
   });
   if (!startResponse?.ok) {
     els.runState.textContent = "Failed to start";
@@ -131,8 +161,11 @@ async function closeMessageModal() {
 
 async function saveDraftSettings() {
   const mode = els.autoMode.checked ? "auto" : "manual";
+  const campaignMode = getCampaignMode();
   const template = (els.template.value || "").trim() || DEFAULT_TEMPLATE;
-  await updateStatePatch({ mode, template });
+  const awarenessTemplate =
+    (els.awarenessTemplate.value || "").trim() || DEFAULT_AWARENESS_TEMPLATE;
+  await updateStatePatch({ mode, campaignMode, template, awarenessTemplate });
 }
 
 async function refresh() {
@@ -141,19 +174,32 @@ async function refresh() {
 }
 
 function bindEvents() {
+  els.messageCampaignMode.addEventListener("change", async () => {
+    lockCampaignModes("message");
+    await saveDraftSettings();
+    await refresh();
+  });
+
+  els.awarenessCampaignMode.addEventListener("change", async () => {
+    lockCampaignModes("awareness");
+    await saveDraftSettings();
+    await refresh();
+  });
+
   els.manualMode.addEventListener("change", async () => {
-    lockModes("manual");
+    lockSendModes("manual");
     await saveDraftSettings();
     await refresh();
   });
 
   els.autoMode.addEventListener("change", async () => {
-    lockModes("auto");
+    lockSendModes("auto");
     await saveDraftSettings();
     await refresh();
   });
 
   els.template.addEventListener("blur", saveDraftSettings);
+  els.awarenessTemplate.addEventListener("blur", saveDraftSettings);
   els.startBtn.addEventListener("click", startMessaging);
   els.stopBtn.addEventListener("click", stopMessaging);
   els.resetBtn.addEventListener("click", resetSentList);
