@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "LinkedIn Hiring Messenger",
-  "version": "1.0.0",
+  "version": "3.0.0",
   "description": "Helps recruiters message LinkedIn applicants with safe, review-friendly automation.",
   "permissions": ["storage", "activeTab", "scripting"],
   "host_permissions": [
