@@ -13,6 +13,7 @@ const els = {
   awarenessTemplate: document.getElementById("awarenessTemplate"),
   messageCampaignMode: document.getElementById("messageCampaignMode"),
   awarenessCampaignMode: document.getElementById("awarenessCampaignMode"),
+  sendToNotAFit: document.getElementById("sendToNotAFit"),
   manualMode: document.getElementById("manualMode"),
   autoMode: document.getElementById("autoMode"),
   sentCount: document.getElementById("sentCount"),
@@ -36,7 +37,8 @@ async function getState() {
       campaignMode: "message",
       template: DEFAULT_TEMPLATE,
       awarenessTemplate: DEFAULT_AWARENESS_TEMPLATE,
-      maxPerSession: 25
+      maxPerSession: 25,
+      sendToNotAFit: false
     }
   );
 }
@@ -46,6 +48,7 @@ function renderState(state) {
   els.awarenessTemplate.value = state.awarenessTemplate || DEFAULT_AWARENESS_TEMPLATE;
   els.messageCampaignMode.checked = state.campaignMode !== "awareness";
   els.awarenessCampaignMode.checked = state.campaignMode === "awareness";
+  els.sendToNotAFit.checked = Boolean(state.sendToNotAFit);
   els.manualMode.checked = state.mode !== "auto";
   els.autoMode.checked = state.mode === "auto";
   els.sentCount.textContent = String(state.sentCount || 0);
@@ -119,7 +122,13 @@ async function startMessaging() {
 
   const startResponse = await chrome.runtime.sendMessage({
     type: "START_AUTOMATION",
-    payload: { mode, campaignMode, template, awarenessTemplate }
+    payload: {
+      mode,
+      campaignMode,
+      template,
+      awarenessTemplate,
+      sendToNotAFit: els.sendToNotAFit.checked
+    }
   });
   if (!startResponse?.ok) {
     els.runState.textContent = "Failed to start";
@@ -165,7 +174,13 @@ async function saveDraftSettings() {
   const template = (els.template.value || "").trim() || DEFAULT_TEMPLATE;
   const awarenessTemplate =
     (els.awarenessTemplate.value || "").trim() || DEFAULT_AWARENESS_TEMPLATE;
-  await updateStatePatch({ mode, campaignMode, template, awarenessTemplate });
+  await updateStatePatch({
+    mode,
+    campaignMode,
+    template,
+    awarenessTemplate,
+    sendToNotAFit: els.sendToNotAFit.checked
+  });
 }
 
 async function refresh() {
@@ -185,6 +200,8 @@ function bindEvents() {
     await saveDraftSettings();
     await refresh();
   });
+
+  els.sendToNotAFit.addEventListener("change", saveDraftSettings);
 
   els.manualMode.addEventListener("change", async () => {
     lockSendModes("manual");
