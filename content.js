@@ -465,7 +465,7 @@
 
   async function getState() {
     const data = await chrome.storage.local.get([STORAGE_KEYS.state]);
-    return data[STORAGE_KEYS.state] || {};
+    return { sendToNotAFit: false, ...(data[STORAGE_KEYS.state] || {}) };
   }
 
   async function setStatePatch(patch) {
@@ -529,25 +529,21 @@
 
   async function findContactButton() {
     return U.retry(async () => {
-      const hiringContactBtn = document.querySelector('button[data-view-name="hiring-applicant-contact"]');
-      if (hiringContactBtn) return hiringContactBtn;
+      for (const root of getApplicantHeaderRoots()) {
+        const hiringContactBtn = root.querySelector('button[data-view-name="hiring-applicant-contact"]');
+        if (hiringContactBtn && isVisibleElement(hiringContactBtn)) return hiringContactBtn;
 
-      const ariaButton = document.querySelector('button[aria-label*="Contact"]');
-      if (ariaButton) return ariaButton;
+        const ariaButton = root.querySelector('button[aria-label*="Contact"]');
+        if (ariaButton && isVisibleElement(ariaButton)) return ariaButton;
 
-      const allButtons = Array.from(document.querySelectorAll("button")).filter((b) => isVisibleElement(b));
-      const contactByText = allButtons.find((btn) => {
-        const text = (btn.textContent || "").trim().toLowerCase();
-        return text === "contact" || text.includes("contact");
-      });
-      if (contactByText) return contactByText;
-
-      // Fallback: look for a standalone "Message" button (some LinkedIn layouts skip the Contact dropdown)
-      const messageByText = allButtons.find((btn) => {
-        const text = (btn.textContent || "").trim().toLowerCase();
-        return text === "message";
-      });
-      return messageByText || null;
+        const btns = Array.from(root.querySelectorAll("button")).filter(isVisibleElement);
+        const contactByText = btns.find((btn) => {
+          const text = (btn.textContent || "").trim().toLowerCase();
+          return text === "contact";
+        });
+        if (contactByText) return contactByText;
+      }
+      return null;
     }, 3, 1000);
   }
 
@@ -604,6 +600,139 @@
           });
           if (messageEl) return messageEl;
         } catch (_) {}
+      }
+      return null;
+    }, 5, 800);
+  }
+
+  function getApplicantHeaderRoots() {
+    return [
+      document.querySelector(".hiring-applicant-header"),
+      document.querySelector("[data-test-applicant-details]"),
+      document.querySelector('[data-view-name="hiring-applicant-details"]'),
+      document.querySelector("main section"),
+      document.querySelector("main")
+    ].filter(Boolean);
+  }
+
+  async function openMessageViaMoreMenu() {
+    const moreButton = await findMoreButtonInHeader();
+    if (!moreButton) {
+      throw new Error("More button not found for Not a fit applicant.");
+    }
+
+    const existingEditors = new Set(getAllComposerEditors());
+    const editorWatchPromise = watchForMessageEditor(30000);
+    moreButton.click();
+    await safeDelay();
+
+    const messageOption = await findMessageInMoreDropdown();
+    if (!messageOption) {
+      throw new Error("Message option in More menu was not found.");
+    }
+    log("Clicking Message in More menu:", (messageOption.textContent || "").trim());
+    messageOption.click();
+    await U.sleep(U.randomInt(1000, 6000));
+
+    return (
+      (await waitForEditorForCurrentApplicant(30000, 250, existingEditors)) ||
+      (await waitForLinkedInMessageTextbox(30000, 250)) ||
+      (await editorWatchPromise) ||
+      (await waitForMessageComposer(30000, 250))
+    );
+  }
+
+  async function handleMissingContactMessage(cardName, candidateKey) {
+    const state = await getState();
+    if (!Boolean(state.sendToNotAFit)) {
+      log("Skipping — no Contact/Message found (Not a fit disabled):", cardName);
+      return {
+        skipped: true,
+        sent: false,
+        profileUrl: candidateKey,
+        cardName,
+        reason: "not a fit disabled"
+      };
+    }
+
+    try {
+      log("No Contact/Message found — opening via More menu");
+      const editor = await openMessageViaMoreMenu();
+      return { skipped: false, editor };
+    } catch (error) {
+      log("More menu failed for Not a fit applicant, skipping:", cardName, error?.message);
+      return {
+        skipped: true,
+        sent: false,
+        profileUrl: candidateKey,
+        cardName,
+        reason: "not a fit disabled"
+      };
+    }
+  }
+
+  function isMoreButton(btn) {
+    if (!btn || !isVisibleElement(btn)) return false;
+
+    const visibleLabel = (btn.querySelector('[aria-hidden="true"]')?.textContent || "").trim().toLowerCase().replace(/…/g, "...");
+    const a11yLabel = (btn.querySelector(".a11y-text")?.textContent || "").trim().toLowerCase();
+    const ariaLabel = (btn.getAttribute("aria-label") || "").trim().toLowerCase();
+
+    if (a11yLabel.includes("see more options") || a11yLabel.includes("more options")) return true;
+    if (ariaLabel.includes("more options") || ariaLabel.includes("more actions")) return true;
+
+    if (visibleLabel === "more" || visibleLabel === "more..." || /^more\.+$/.test(visibleLabel)) return true;
+    if (visibleLabel.startsWith("more")) return true;
+
+    // Fallback when label spans are flattened (e.g. "more...see more options").
+    const flatText = (btn.textContent || "").trim().toLowerCase().replace(/…/g, "...");
+    if (flatText.includes("see more options") || /^more\.+/.test(flatText)) return true;
+
+    if (btn.classList.contains("artdeco-dropdown__trigger") && flatText.includes("more")) return true;
+    return false;
+  }
+
+  async function findMoreButtonInHeader() {
+    return U.retry(async () => {
+      const scopedSelectors = [
+        "#hiring-detail-root .hiring-applicant-header .display-flex.justify-space-between button.artdeco-dropdown__trigger",
+        "#hiring-detail-root .hiring-applicant-header button.artdeco-dropdown__trigger",
+        "#hiring-detail-root button.artdeco-dropdown__trigger",
+        ".hiring-applicant-header-actions button.artdeco-dropdown__trigger",
+        ".hiring-applicant-header button.artdeco-dropdown__trigger",
+        '[data-view-name="hiring-applicant-details"] button.artdeco-dropdown__trigger'
+      ];
+
+      for (const selector of scopedSelectors) {
+        const triggers = queryAllAcrossDocumentsDeep(selector).filter(isVisibleElement);
+        const moreBtn = triggers.find(isMoreButton);
+        if (moreBtn) return moreBtn;
+      }
+
+      for (const root of getApplicantHeaderRoots()) {
+        const btns = Array.from(
+          root.querySelectorAll('button.artdeco-dropdown__trigger, button[aria-expanded], button, [role="button"]')
+        );
+        const moreBtn = btns.find(isMoreButton);
+        if (moreBtn) return moreBtn;
+      }
+
+      const allTriggers = queryAllAcrossDocumentsDeep("button.artdeco-dropdown__trigger").filter(isVisibleElement);
+      return allTriggers.find(isMoreButton) || null;
+    }, 5, 800);
+  }
+
+  async function findMessageInMoreDropdown() {
+    return U.retry(async () => {
+      const dropdowns = queryAllAcrossDocumentsDeep(".artdeco-dropdown__content-inner");
+      for (const dropdown of dropdowns) {
+        if (!isVisibleElement(dropdown)) continue;
+
+        const messageBtn = dropdown.querySelector('button[data-view-name="hiring-applicant-contact-message"]');
+        if (messageBtn && isVisibleElement(messageBtn)) return messageBtn;
+
+        const messageItem = findMessageOptionInMenu(dropdown);
+        if (messageItem && isVisibleElement(messageItem)) return messageItem;
       }
       return null;
     }, 5, 800);
@@ -1376,41 +1505,46 @@
 
     // Try direct Message button first (new layout with hiring-applicant-contact-message)
     let directMessageBtn = document.querySelector('button[data-view-name="hiring-applicant-contact-message"]');
+    if (
+      directMessageBtn &&
+      (!isVisibleElement(directMessageBtn) ||
+        directMessageBtn.closest(".artdeco-dropdown__content-inner, .artdeco-dropdown__content"))
+    ) {
+      directMessageBtn = null;
+    }
 
     // Fallback: find a standalone "Message" button by text/aria-label in the applicant header area
     if (!directMessageBtn) {
-      const headerRoots = [
-        document.querySelector('.hiring-applicant-header'),
-        document.querySelector('[data-test-applicant-details]'),
-        document.querySelector('[data-view-name="hiring-applicant-details"]'),
-        document.querySelector('main section'),
-        document.querySelector('main')
-      ].filter(Boolean);
+      const headerRoots = getApplicantHeaderRoots();
 
       for (const root of headerRoots) {
         if (directMessageBtn) break;
         const btns = Array.from(root.querySelectorAll('button, a[role="button"]'));
         directMessageBtn = btns.find((btn) => {
+          if (!isVisibleElement(btn)) return false;
+          if (btn.closest(".artdeco-dropdown__content-inner, .artdeco-dropdown__content")) return false;
           const text = (btn.textContent || "").trim().toLowerCase();
           const aria = (btn.getAttribute("aria-label") || "").trim().toLowerCase();
-          // Match buttons whose text/aria is exactly "message" or starts with "message "
           if (text === "message" || aria === "message" || aria.startsWith("message ")) return true;
-          // Also match InMail/Send message variants
           if (text === "send message" || aria === "send message") return true;
           return false;
         }) || null;
       }
     }
 
-    // Global fallback: any visible button/link whose text is exactly "Message"
+    // Visible Message button in applicant header only
     if (!directMessageBtn) {
-      const allBtns = Array.from(document.querySelectorAll('button, a[role="button"]'));
-      directMessageBtn = allBtns.find((btn) => {
-        if (!isVisibleElement(btn)) return false;
-        const text = (btn.textContent || "").trim();
-        if (text.toLowerCase() === "message") return true;
-        return false;
-      }) || null;
+      for (const root of getApplicantHeaderRoots()) {
+        const allBtns = Array.from(root.querySelectorAll('button, a[role="button"]'));
+        directMessageBtn = allBtns.find((btn) => {
+          if (!isVisibleElement(btn)) return false;
+          if (btn.closest(".artdeco-dropdown__content-inner, .artdeco-dropdown__content")) return false;
+          const text = (btn.textContent || "").trim();
+          if (text.toLowerCase() === "message") return true;
+          return false;
+        }) || null;
+        if (directMessageBtn) break;
+      }
     }
 
     let editor, dialog;
@@ -1428,46 +1562,59 @@
         (await editorWatchPromise) ||
         (await waitForMessageComposer(30000, 250));
     } else {
-      // Old layout: Contact dropdown → Message menu option
       const contactButton = await findContactButton();
       if (!contactButton) {
-        throw new Error("Contact/Message button not found.");
-      }
-      contactButton.click();
-      await safeDelay();
+        const fallback = await handleMissingContactMessage(cardName, candidateKey);
+        if (fallback.skipped) return fallback;
+        editor = fallback.editor;
+      } else {
+        contactButton.click();
+        await safeDelay();
 
-      const messageOption = await findMessageMenuOption();
-      if (!messageOption) {
-        throw new Error("Message option in contact menu was not found.");
-      }
-      const existingEditors = new Set(getAllComposerEditors());
-      const editorWatchPromise = watchForMessageEditor(30000);
-      log(
-        "Clicking message option:",
-        messageOption.tagName,
-        messageOption.getAttribute("href"),
-        (messageOption.textContent || "").trim()
-      );
-      messageOption.click();
-      await U.sleep(U.randomInt(1000, 6000));
+        const messageOption = await findMessageMenuOption();
+        if (!messageOption) {
+          const fallback = await handleMissingContactMessage(cardName, candidateKey);
+          if (fallback.skipped) return fallback;
+          editor = fallback.editor;
+        } else {
+          const existingEditors = new Set(getAllComposerEditors());
+          const editorWatchPromise = watchForMessageEditor(30000);
+          log(
+            "Clicking message option:",
+            messageOption.tagName,
+            messageOption.getAttribute("href"),
+            (messageOption.textContent || "").trim()
+          );
+          messageOption.click();
+          await U.sleep(U.randomInt(1000, 6000));
 
-      editor =
-        (await waitForEditorForCurrentApplicant(30000, 250, existingEditors)) ||
-        (await waitForLinkedInMessageTextbox(30000, 250)) ||
-        (await editorWatchPromise) ||
-        (await waitForMessageComposer(30000, 250));
+          editor =
+            (await waitForEditorForCurrentApplicant(30000, 250, existingEditors)) ||
+            (await waitForLinkedInMessageTextbox(30000, 250)) ||
+            (await editorWatchPromise) ||
+            (await waitForMessageComposer(30000, 250));
+        }
+      }
     }
 
-    // Use the editor that appeared after the click (new modal for this applicant), not one that was already open.
-    dialog = editor
-      ? editor.closest('div[role="dialog"]') ||
-        editor.closest("div.msg-overlay-conversation-bubble") ||
-        editor.closest("section.msg-overlay-conversation-bubble") ||
-        editor.closest("form.msg-form") ||
-        document.body
-      : null;
+    if (!editor) {
+      const fallback = await handleMissingContactMessage(cardName, candidateKey);
+      if (fallback.skipped) return fallback;
+      editor = fallback.editor;
+    }
 
     if (!editor) {
+      const stateNow = await getState();
+      if (!Boolean(stateNow.sendToNotAFit)) {
+        log("Skipping — composer unavailable (Not a fit disabled):", cardName);
+        return {
+          skipped: true,
+          sent: false,
+          profileUrl: candidateKey,
+          cardName,
+          reason: "not a fit disabled"
+        };
+      }
       log("Composer detection debug:", {
         activeBubbleCount: document.querySelectorAll(
           'div.msg-overlay-conversation-bubble[role="dialog"], div.msg-overlay-conversation-bubble--is-active[role="dialog"]'
@@ -1478,6 +1625,15 @@
       });
       throw new Error("Messaging composer failed to open.");
     }
+
+    // Use the editor that appeared after the click (new modal for this applicant), not one that was already open.
+    dialog = editor
+      ? editor.closest('div[role="dialog"]') ||
+        editor.closest("div.msg-overlay-conversation-bubble") ||
+        editor.closest("section.msg-overlay-conversation-bubble") ||
+        editor.closest("form.msg-form") ||
+        document.body
+      : null;
 
     if (hasExistingConversationMessages(dialog, editor)) {
       log("Skipping candidate with existing conversation history:", candidateKey);
@@ -1638,6 +1794,8 @@
               skipStatus = "Skipped: already has messages";
             } else if (result.reason === "awareness filter") {
               skipStatus = "Skipped: not in awareness list";
+            } else if (result.reason === "not a fit disabled") {
+              skipStatus = "Skipped: Not a fit (disabled)";
             }
             await updateProgress({ currentCandidate: result.cardName, status: skipStatus });
           }

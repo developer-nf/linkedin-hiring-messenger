@@ -12,7 +12,8 @@ const DEFAULT_STATE = {
   awarenessTemplate:
     "Hi {first_name}, thanks for applying for the {job_title} role. I wanted to share a quick awareness note and next steps.",
   sessionStartAt: 0,
-  maxPerSession: 25
+  maxPerSession: 25,
+  sendToNotAFit: false
 };
 
 const STORAGE_KEYS = {
@@ -68,7 +69,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             message.payload?.campaignMode === "awareness" ? "awareness" : "message",
           template: message.payload?.template || DEFAULT_STATE.template,
           awarenessTemplate:
-            message.payload?.awarenessTemplate || DEFAULT_STATE.awarenessTemplate
+            message.payload?.awarenessTemplate || DEFAULT_STATE.awarenessTemplate,
+          sendToNotAFit: Boolean(message.payload?.sendToNotAFit)
         };
         const state = await setState(patch);
         sendResponse({ ok: true, state });
