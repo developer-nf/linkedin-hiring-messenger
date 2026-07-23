@@ -1,6 +1,6 @@
 (() => {
   const U = window.LinkedInHiringUtils;
-  if (!U?.isApplicantsPage()) return;
+  if (!U?.isSupportedHiringPage()) return;
 
   const STORAGE_KEYS = {
     state: "lhm_state",
@@ -14,6 +14,10 @@
 
   function log(...args) {
     console.log("[LHM][content]", ...args);
+  }
+
+  function getPageKind() {
+    return U.getHiringPageKind();
   }
 
   function isVisibleElement(el) {
@@ -157,13 +161,27 @@
   }
 
   function getCandidateProfileUrl(card) {
-    const profileAnchor = card.querySelector('a[href*="/in/"]');
-    if (profileAnchor?.href) return profileAnchor.href;
+    const profileAnchor = card.querySelector?.('a[href*="/in/"]') || (card.matches?.('a[href*="/in/"]') ? card : null);
+    if (profileAnchor?.href && profileAnchor.href.includes("/in/")) return profileAnchor.href;
 
-    // New layout: applicant detail link (strip query params for stable key)
+    const href = card.getAttribute?.("href") || card.href || card.querySelector?.("a[href]")?.href || "";
+    if (href) {
+      try {
+        const url = new URL(href, window.location.origin);
+        const candidateId = url.searchParams.get("candidateId");
+        if (candidateId) return `${url.origin}/hiring/candidates/?candidateId=${candidateId}`;
+        const applicationId = url.searchParams.get("applicationId");
+        if (applicationId) return `${url.origin}/hiring/applicants/?applicationId=${applicationId}`;
+        if (url.pathname.includes("/applicants/") && url.pathname.includes("/detail")) {
+          return url.origin + url.pathname;
+        }
+      } catch (_) {}
+    }
+
+    // Classic layout: applicant detail link (strip query params for stable key)
     const applicantLink =
-      card.querySelector('a[href*="/applicants/"][href*="/detail/"]') ||
-      card.querySelector('a[href*="/hiring/jobs/"]');
+      card.querySelector?.('a[href*="/applicants/"][href*="/detail/"]') ||
+      card.querySelector?.('a[href*="/hiring/jobs/"]');
     if (applicantLink?.href) {
       try {
         const url = new URL(applicantLink.href, window.location.origin);
@@ -186,17 +204,31 @@
   }
 
   function getCandidateNameFromCard(card) {
-    // New layout: name from entity lockup title
+    // Candidate search / applicants hub: name before "·" on the card link text
+    if (card.matches?.("a[href*='candidateId='], a[href*='applicationId=']")) {
+      const raw = (card.innerText || card.textContent || "").replace(/\s+/g, " ").trim();
+      const name = raw.split("·")[0].trim();
+      if (name) return name;
+    }
+
+    const hubTitle = card.querySelector?.("p");
+    if (hubTitle?.textContent?.trim() && getPageKind() !== "classic-applicants") {
+      const maybe = hubTitle.textContent.trim().split("·")[0].trim();
+      if (maybe && maybe.split(" ").length >= 1 && maybe.length < 80) {
+        // Prefer lockup title below when present
+      }
+    }
+
+    // Classic / older layout: name from entity lockup title
     const lockupTitle =
-      card.querySelector('.artdeco-entity-lockup__title.hiring-people-card__title') ||
-      card.querySelector('.artdeco-entity-lockup__title');
+      card.querySelector?.('.artdeco-entity-lockup__title.hiring-people-card__title') ||
+      card.querySelector?.('.artdeco-entity-lockup__title');
     if (lockupTitle?.textContent?.trim()) return lockupTitle.textContent.trim();
 
-    const ariaNameEl = Array.from(card.querySelectorAll("[aria-label]")).find((el) => {
+    const ariaNameEl = Array.from(card.querySelectorAll?.("[aria-label]") || []).find((el) => {
       const value = (el.getAttribute("aria-label") || "").trim();
       if (!value) return false;
       if (value.toLowerCase().includes("view full profile")) return false;
-      // Candidate labels on this LinkedIn variant typically look like "Jane Doe" or "Jane Doe, Verified profile".
       return value.split(" ").length >= 2;
     });
     if (ariaNameEl) {
@@ -204,13 +236,15 @@
       return raw.replace(/,\s*verified profile/i, "").trim();
     }
 
-    const strongText = card.querySelector("strong");
+    const strongText = card.querySelector?.("strong");
     if (strongText?.textContent?.trim()) return strongText.textContent.trim();
-    const spans = Array.from(card.querySelectorAll("span"));
+    const spans = Array.from(card.querySelectorAll?.("span") || []);
     const likely = spans.find((s) => (s.textContent || "").trim().split(" ").length >= 2);
     if (likely?.textContent?.trim()) return likely.textContent.trim();
-    const paragraph = card.querySelector("p");
-    if (paragraph?.textContent?.trim()) return paragraph.textContent.trim();
+    const paragraph = card.querySelector?.("p");
+    if (paragraph?.textContent?.trim()) {
+      return paragraph.textContent.trim().split("·")[0].trim();
+    }
     return likely?.textContent?.trim() || "Candidate";
   }
 
@@ -329,8 +363,75 @@
     return card ? [card] : [];
   }
 
+  function collectUniqueIdLinks(paramName) {
+    const seen = new Set();
+    const cards = [];
+    const anchors = Array.from(document.querySelectorAll(`a[href*="${paramName}="]`));
+    for (const anchor of anchors) {
+      if (!(anchor instanceof HTMLElement) || !isVisibleElement(anchor)) continue;
+      let id = "";
+      try {
+        id = new URL(anchor.href, window.location.origin).searchParams.get(paramName) || "";
+      } catch (_) {
+        continue;
+      }
+      if (!id || seen.has(id)) continue;
+
+      const text = (anchor.innerText || anchor.textContent || "").replace(/\s+/g, " ").trim();
+      // Skip nav / utility links only. Do NOT filter on "qualifications" —
+      // Candidate Search cards often include "Meets most qualifications".
+      if (!text || /^(add a coworker|candidate search)$/i.test(text)) continue;
+      if (/add a coworker/i.test(text) && text.split(" ").length <= 4) continue;
+      if (text.split(" ").length < 2) continue;
+
+      // Prefer links that look like a person card (name · ...)
+      const namePart = text.split("·")[0].trim();
+      if (!namePart || namePart.length < 2 || namePart.length > 80) continue;
+
+      seen.add(id);
+      cards.push(anchor);
+    }
+    return cards;
+  }
+
+  function getCandidateSearchCards() {
+    return collectUniqueIdLinks("candidateId");
+  }
+
+  function getApplicantsHubCards() {
+    const byComponent = Array.from(
+      document.querySelectorAll('a[componentkey^="paginatedApplicantCard-"]')
+    ).filter((a) => isVisibleElement(a));
+    if (byComponent.length) {
+      const seen = new Set();
+      const cards = [];
+      for (const anchor of byComponent) {
+        let id = "";
+        try {
+          id = new URL(anchor.href, window.location.origin).searchParams.get("applicationId") || "";
+        } catch (_) {}
+        if (!id) id = (anchor.getAttribute("componentkey") || "").replace("paginatedApplicantCard-", "");
+        if (!id || seen.has(id)) continue;
+        const text = (anchor.innerText || "").replace(/\s+/g, " ").trim();
+        if (!text || text.split(" ").length < 2) continue;
+        if (/add a coworker/i.test(text)) continue;
+        // Real applicant cards usually look like "Name · …"
+        const namePart = text.split("·")[0].trim();
+        if (!namePart || namePart.length < 2 || namePart.length > 80) continue;
+        seen.add(id);
+        cards.push(anchor);
+      }
+      if (cards.length) return cards;
+    }
+    return collectUniqueIdLinks("applicationId");
+  }
+
   function getCandidateCards() {
-    // New layout: hiring applicants list items
+    const kind = getPageKind();
+    if (kind === "candidates") return getCandidateSearchCards();
+    if (kind === "applicants-hub") return getApplicantsHubCards();
+
+    // Classic layout: hiring applicants list items
     const hiringListItems = Array.from(document.querySelectorAll('li.hiring-applicants__list-item'));
     if (hiringListItems.length) {
       return hiringListItems.filter((li) => {
@@ -397,10 +498,28 @@
   }
 
   async function openCandidateDetails(card) {
-    // New layout: click the hiring applicant link directly
+    // Candidate search / applicants hub: the card itself is the selector link
+    if (
+      card.matches?.('a[href*="candidateId="], a[href*="applicationId="], a[componentkey^="paginatedApplicantCard-"]')
+    ) {
+      card.click();
+      await U.sleep(U.randomInt(1000, 6000));
+      return true;
+    }
+
+    // Classic layout: click the hiring applicant link directly
     const hiringApplicantLink = card.querySelector('a[href*="/applicants/"][href*="/detail/"]');
     if (hiringApplicantLink) {
       hiringApplicantLink.click();
+      await U.sleep(U.randomInt(1000, 6000));
+      return true;
+    }
+
+    const hubLink =
+      card.querySelector?.('a[href*="applicationId="]') ||
+      card.querySelector?.('a[href*="candidateId="]');
+    if (hubLink) {
+      hubLink.click();
       await U.sleep(U.randomInt(1000, 6000));
       return true;
     }
@@ -453,7 +572,7 @@
     await U.observeForElement({
       root: document,
       selector:
-        '[data-testid="applicantListCollectionRef"] [role="button"][tabindex="0"], [role="listitem"], [role="option"], li[data-test-applicant-card], [data-test-applicant-name], li.hiring-applicants__list-item',
+        'a[href*="candidateId="], a[href*="applicationId="], a[componentkey^="paginatedApplicantCard-"], [data-testid="applicantListCollectionRef"] [role="button"][tabindex="0"], [role="listitem"], [role="option"], li[data-test-applicant-card], [data-test-applicant-name], li.hiring-applicants__list-item',
       timeoutMs: 15000
     });
 
@@ -509,20 +628,28 @@
   }
 
   async function waitForRightPanelLoad() {
-    // Wait for either contact button, message button, or details section to appear after card click.
+    // Wait for contact/message actions or details section after card click.
     const panel = await U.observeForElement({
       root: document,
       selector:
-        'button[data-view-name="hiring-applicant-contact"], button[data-view-name="hiring-applicant-contact-message"], button[aria-label*="Contact"], button[aria-label="Message"], [data-test-applicant-details], [role="region"], .hiring-applicant-header',
+        'a[aria-label^="Send a message"], a[href*="/messaging/compose"], button[data-view-name="hiring-applicant-contact"], button[data-view-name="hiring-applicant-contact-message"], button[aria-label*="Contact"], button[aria-label="Message"], [data-test-applicant-details], [role="region"], .hiring-applicant-header',
       timeoutMs: 12000
     });
     if (panel) return true;
 
-    // Fallback: check if a visible "Message" button appeared in the panel
-    const allBtns = Array.from(document.querySelectorAll('button'));
+    // Fallback: visible Message / Contact controls (classic + applicants hub)
+    const allBtns = Array.from(document.querySelectorAll("button, a"));
     const msgBtn = allBtns.find((btn) => {
-      const text = (btn.textContent || "").trim().toLowerCase();
-      return text === "message" && isVisibleElement(btn);
+      if (!isVisibleElement(btn)) return false;
+      const text = (btn.textContent || "").replace(/\s+/g, " ").trim().toLowerCase();
+      const aria = (btn.getAttribute("aria-label") || "").trim().toLowerCase();
+      return (
+        text === "message" ||
+        text === "contact" ||
+        aria.startsWith("send a message") ||
+        aria === "message" ||
+        aria === "contact"
+      );
     });
     return Boolean(msgBtn);
   }
@@ -543,19 +670,234 @@
         });
         if (contactByText) return contactByText;
       }
-      return null;
+
+      // Applicants hub (new UI): Contact is a plain visible button in the detail actions
+      const globalContact = Array.from(document.querySelectorAll("button")).find((btn) => {
+        if (!isVisibleElement(btn)) return false;
+        return (btn.textContent || "").replace(/\s+/g, " ").trim().toLowerCase() === "contact";
+      });
+      return globalContact || null;
     }, 3, 1000);
+  }
+
+  function findDirectSendMessageAction() {
+    const byAria = Array.from(document.querySelectorAll("a, button")).find((el) => {
+      if (!isVisibleElement(el)) return false;
+      const aria = (el.getAttribute("aria-label") || "").trim().toLowerCase();
+      return aria.startsWith("send a message");
+    });
+    if (byAria) return byAria;
+
+    const composeLinks = Array.from(
+      document.querySelectorAll('a[href*="/messaging/compose/"]')
+    ).filter((el) => {
+      if (!isVisibleElement(el)) return false;
+      if (el.closest('[role="menu"], .artdeco-dropdown__content, .artdeco-dropdown__content-inner')) {
+        return false;
+      }
+      const href = el.getAttribute("href") || "";
+      const text = (el.textContent || "").replace(/\s+/g, " ").trim().toLowerCase();
+      if (text !== "message" && !href.includes("profileUrn") && !href.includes("recipient=")) {
+        return false;
+      }
+      return true;
+    });
+    if (composeLinks.length) return composeLinks[0];
+
+    return null;
+  }
+
+  /**
+   * Hiring Message links (Candidates + Applicants hub) often include params that
+   * open LinkedIn's AI/generated compose UI. When generation fails there is no
+   * writable editor ("problem generating the message"). Keep only the fields
+   * needed for a normal msgOverlay composer.
+   */
+  function toPlainComposeHref(href) {
+    if (!href || !href.includes("/messaging/compose")) return href;
+    try {
+      const url = new URL(href, location.origin);
+      const keep = new Set(["profileUrn", "recipient", "subject", "interop"]);
+      for (const key of [...url.searchParams.keys()]) {
+        if (!keep.has(key) || key.toLowerCase().startsWith("gai")) {
+          url.searchParams.delete(key);
+        }
+      }
+      // Re-add keep keys that were wrongly deleted if gai* matched — keep set already excludes gai
+      url.searchParams.set("interop", "msgOverlay");
+      return `${url.pathname}${url.search}`;
+    } catch (_) {
+      return href;
+    }
+  }
+
+  function composeHrefNeedsPlainRewrite(href) {
+    if (!href || !href.includes("/messaging/compose")) return false;
+    const lower = href.toLowerCase();
+    return (
+      lower.includes("gaiintenttype=") ||
+      lower.includes("gaicontenttype=") ||
+      lower.includes("gaicontexturn=") ||
+      lower.includes("screencontext=") ||
+      lower.includes("hiring_outreach") ||
+      lower.includes("jobpostingurn=") ||
+      lower.includes("jobapplicationurn=") ||
+      lower.includes("jobvalidationtoken=") ||
+      lower.includes("contextentityurn=") ||
+      lower.includes("workflowid=")
+    );
+  }
+
+  function prepareMessageActionForManualCompose(el) {
+    if (!el || el.tagName !== "A") return el;
+    const href = el.getAttribute("href") || "";
+    if (!composeHrefNeedsPlainRewrite(href) && !href.toLowerCase().includes("gai")) return el;
+    const plain = toPlainComposeHref(href);
+    if (plain && plain !== href) {
+      el.setAttribute("href", plain);
+      log("Rewrote hiring Message link to plain msgOverlay compose");
+    }
+    return el;
+  }
+
+  function isAiComposeBlockedUi() {
+    const nodes = Array.from(
+      document.querySelectorAll('[role="alert"], p, div, span, h2, h3')
+    ).slice(0, 400);
+    return nodes.some((el) => {
+      if (!isVisibleElement(el)) return false;
+      const text = (el.textContent || "").replace(/\s+/g, " ").trim().toLowerCase();
+      if (!text || text.length > 180) return false;
+      return (
+        text.includes("problem generating the message") ||
+        text === "rate this ai-generated content" ||
+        text.includes("rate this ai-generated")
+      );
+    });
+  }
+
+  function dismissAiComposeNotices() {
+    const closes = Array.from(document.querySelectorAll('button[aria-label="Close"]')).filter(
+      isVisibleElement
+    );
+    for (const btn of closes.slice(0, 3)) {
+      try {
+        btn.click();
+      } catch (_) {}
+    }
+  }
+
+  function openPlainComposeOverlay(fromHref) {
+    const plain = toPlainComposeHref(fromHref);
+    if (!plain || !plain.includes("/messaging/compose")) return false;
+    const link = document.createElement("a");
+    link.href = plain;
+    link.setAttribute("href", plain);
+    // Keep relative so LinkedIn SPA opens msgOverlay instead of full navigation.
+    link.style.display = "none";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    log("Opened plain compose overlay:", plain);
+    return true;
+  }
+
+  async function clickMessageActionAndWaitForEditor(actionEl) {
+    const originalHref = actionEl?.getAttribute?.("href") || "";
+    prepareMessageActionForManualCompose(actionEl);
+
+    // Close leftover composers so we never attach to the previous candidate.
+    try {
+      await closeOpenComposerIfNeeded(3500);
+    } catch (_) {}
+
+    const existingEditors = new Set(getAllComposerEditors());
+    actionEl.click();
+    await U.sleep(U.randomInt(1000, 6000));
+
+    // Cap total wait so LinkedIn rate-limits don't stack into multi-minute hangs.
+    let editor =
+      (await waitForEditorForCurrentApplicant(10000, 250, existingEditors)) ||
+      (await waitForLinkedInMessageTextbox(8000, 250)) ||
+      (await waitForMessageComposer(5000, 250));
+
+    // If LinkedIn reused a pre-existing editor node, drop it and open plain compose.
+    if (editor && existingEditors.has(editor)) {
+      log("Ignoring stale composer from previous candidate");
+      editor = null;
+    }
+
+    if (!editor && (composeHrefNeedsPlainRewrite(originalHref) || isAiComposeBlockedUi() || existingEditors.size > 0)) {
+      log("Composer missing or stale — retrying plain compose");
+      dismissAiComposeNotices();
+      await U.sleep(U.randomInt(400, 900));
+      try {
+        await closeAnyOpenComposer(2500);
+      } catch (_) {}
+      const retryExisting = new Set(getAllComposerEditors());
+      const retryHref = actionEl?.getAttribute?.("href") || originalHref;
+      if (openPlainComposeOverlay(retryHref || originalHref)) {
+        await U.sleep(U.randomInt(1000, 6000));
+        editor =
+          (await waitForEditorForCurrentApplicant(12000, 250, retryExisting)) ||
+          (await waitForLinkedInMessageTextbox(8000, 250)) ||
+          (await waitForMessageComposer(5000, 250));
+        if (editor && retryExisting.has(editor)) editor = null;
+      }
+    }
+
+    return editor;
+  }
+
+  function fillSubjectIfPresent(dialog, editor, subjectText) {
+    if (!subjectText) return;
+    const root =
+      dialog ||
+      editor?.closest("form.msg-form") ||
+      editor?.closest(".msg-form") ||
+      editor?.closest('div[role="dialog"]') ||
+      document;
+    const subject =
+      root.querySelector('input.msg-form__subject, input[name="subject"]') ||
+      root.querySelector('input[aria-label*="Subject" i], input[placeholder*="Subject" i]') ||
+      Array.from(root.querySelectorAll("input")).find((el) => {
+        if (!isVisibleElement(el)) return false;
+        const aria = (el.getAttribute("aria-label") || "").toLowerCase();
+        const ph = (el.getAttribute("placeholder") || "").toLowerCase();
+        return aria.includes("subject") || ph.includes("subject");
+      });
+    if (!subject || !isVisibleElement(subject)) return;
+    if ((subject.value || "").trim()) return;
+
+    try {
+      subject.focus();
+      subject.value = subjectText.slice(0, 80);
+      subject.dispatchEvent(new Event("input", { bubbles: true }));
+      subject.dispatchEvent(new Event("change", { bubbles: true }));
+      log("Filled message subject");
+    } catch (_) {}
   }
 
   function findMessageOptionInMenu(menu) {
     if (!menu) return null;
     const menuItems = Array.from(
-      menu.querySelectorAll("button, [role='menuitem'], a, div[role='button'], div.artdeco-dropdown__item, li")
+      menu.querySelectorAll(
+        "button, [role='menuitem'], a, div[role='button'], div.artdeco-dropdown__item, li, span[role='menuitem']"
+      )
     );
+    const exact = menuItems.find((item) => {
+      if (!isVisibleElement(item)) return false;
+      const text = (item.textContent || "").replace(/\s+/g, " ").trim().toLowerCase();
+      return text === "message";
+    });
+    if (exact) return exact;
+
     const messageItem = menuItems.find((item) => {
+      if (!isVisibleElement(item)) return false;
       const text = (item.textContent || "").trim().toLowerCase();
       if (!(text === "message" || text.includes("message"))) return false;
       if (text.includes("share")) return false;
+      if (text.includes("mark as contacted")) return false;
       return true;
     });
     return messageItem || null;
@@ -566,12 +908,15 @@
       const docs = getSearchDocuments();
       for (const doc of docs) {
         try {
-          const menu =
-            doc.querySelector('div[role="menu"]') ||
-            querySelectorIncludingShadow(doc.body || doc.documentElement, 'div[role="menu"]') ||
-            querySelectorIncludingShadow(doc.body || doc.documentElement, '[role="listbox"]');
-          const messageItem = findMessageOptionInMenu(menu);
-          if (messageItem && isVisibleElement(messageItem)) return messageItem;
+          const menus = [
+            ...querySelectorAllIncludingShadow(doc.body || doc.documentElement, 'div[role="menu"]'),
+            ...querySelectorAllIncludingShadow(doc.body || doc.documentElement, '[role="listbox"]'),
+            ...Array.from(doc.querySelectorAll('div[role="menu"], [role="menu"], [role="listbox"]'))
+          ];
+          for (const menu of menus) {
+            const messageItem = findMessageOptionInMenu(menu);
+            if (messageItem && isVisibleElement(messageItem)) return messageItem;
+          }
         } catch (_) {}
       }
 
@@ -588,21 +933,23 @@
       for (const doc of docs) {
         try {
           const root = doc.body || doc.documentElement || doc;
-          const candidates = querySelectorAllIncludingShadow(root, "button, a, div[role='menuitem'], div[role='button'], [role='menuitem']");
+          const candidates = querySelectorAllIncludingShadow(
+            root,
+            "button, a, div[role='menuitem'], div[role='button'], [role='menuitem']"
+          );
           const visible = candidates.filter((el) => isVisibleElement(el));
           const messageEl = visible.find((el) => {
-            const text = (el.textContent || "").trim().toLowerCase();
-            if (!(text === "message" || text.includes("message"))) return false;
+            const text = (el.textContent || "").replace(/\s+/g, " ").trim().toLowerCase();
+            if (text !== "message" && !text.startsWith("message ")) return false;
             if (text.includes("share")) return false;
-            const href = el.getAttribute("href") || "";
-            if (href.includes("/messaging/compose/") && href.includes("subject=")) return false;
+            // Applicants hub Message links include subject= — that is valid, do not skip.
             return true;
           });
           if (messageEl) return messageEl;
         } catch (_) {}
       }
       return null;
-    }, 5, 800);
+    }, 8, 700);
   }
 
   function getApplicantHeaderRoots() {
@@ -610,9 +957,65 @@
       document.querySelector(".hiring-applicant-header"),
       document.querySelector("[data-test-applicant-details]"),
       document.querySelector('[data-view-name="hiring-applicant-details"]'),
+      document.querySelector('[data-testid="applicant-detail"]'),
+      document.querySelector('[data-testid="applicantDetails"]'),
+      // Applicants hub: prefer the right-side detail column when present
+      document.querySelector('aside'),
+      document.querySelector('[role="complementary"]'),
       document.querySelector("main section"),
       document.querySelector("main")
     ].filter(Boolean);
+  }
+
+  function findApplicantsHubContactButton() {
+    const roots = getApplicantHeaderRoots();
+    for (const root of roots) {
+      const buttons = Array.from(root.querySelectorAll("button")).filter(isVisibleElement);
+      const contact = buttons.find((btn) => {
+        const text = (btn.textContent || "").replace(/\s+/g, " ").trim().toLowerCase();
+        const aria = (btn.getAttribute("aria-label") || "").trim().toLowerCase();
+        return text === "contact" || aria === "contact" || aria.startsWith("contact ");
+      });
+      if (contact) return contact;
+    }
+
+    return (
+      Array.from(document.querySelectorAll("button")).find((btn) => {
+        if (!isVisibleElement(btn)) return false;
+        const text = (btn.textContent || "").replace(/\s+/g, " ").trim().toLowerCase();
+        return text === "contact";
+      }) || null
+    );
+  }
+
+  async function openApplicantsHubComposer() {
+    // Hub: Contact → menu → Message (compose link with jobApplicationUrn/subject).
+    const contactButton = findApplicantsHubContactButton() || (await findContactButton());
+    if (!contactButton) {
+      const direct = findDirectSendMessageAction();
+      if (direct && isVisibleElement(direct)) {
+        log("Applicants hub: using direct Message action");
+        return clickMessageActionAndWaitForEditor(direct);
+      }
+      throw new Error("Applicants hub Contact button not found.");
+    }
+
+    log("Applicants hub: clicking Contact");
+    contactButton.click();
+    await safeDelay();
+
+    const messageOption = await findMessageMenuOption();
+    if (!messageOption) {
+      throw new Error("Applicants hub Message option not found in Contact menu.");
+    }
+
+    log(
+      "Applicants hub: clicking Message in menu:",
+      messageOption.tagName,
+      messageOption.getAttribute("href"),
+      (messageOption.textContent || "").trim()
+    );
+    return clickMessageActionAndWaitForEditor(messageOption);
   }
 
   async function openMessageViaMoreMenu() {
@@ -621,8 +1024,6 @@
       throw new Error("More button not found for Not a fit applicant.");
     }
 
-    const existingEditors = new Set(getAllComposerEditors());
-    const editorWatchPromise = watchForMessageEditor(30000);
     moreButton.click();
     await safeDelay();
 
@@ -631,15 +1032,7 @@
       throw new Error("Message option in More menu was not found.");
     }
     log("Clicking Message in More menu:", (messageOption.textContent || "").trim());
-    messageOption.click();
-    await U.sleep(U.randomInt(1000, 6000));
-
-    return (
-      (await waitForEditorForCurrentApplicant(30000, 250, existingEditors)) ||
-      (await waitForLinkedInMessageTextbox(30000, 250)) ||
-      (await editorWatchPromise) ||
-      (await waitForMessageComposer(30000, 250))
-    );
+    return clickMessageActionAndWaitForEditor(messageOption);
   }
 
   async function handleMissingContactMessage(cardName, candidateKey) {
@@ -947,23 +1340,30 @@
   }
 
   async function waitForEditorForCurrentApplicant(timeoutMs, pollMs, existingEditorSet) {
+    const existing = existingEditorSet || new Set();
     const started = Date.now();
     while (Date.now() - started < timeoutMs) {
       const activeEditor = getEditorInActiveBubble();
-      if (activeEditor && !existingEditorSet.has(activeEditor)) return activeEditor;
+      if (activeEditor && !existing.has(activeEditor)) return activeEditor;
 
       const allEditors = getAllComposerEditors();
-      const newEditor = allEditors.find((ed) => !existingEditorSet.has(ed));
+      const newEditor = allEditors.find((ed) => !existing.has(ed));
       if (newEditor) return newEditor;
 
-      if (allEditors.length > 0 && existingEditorSet.size === 0) return allEditors[allEditors.length - 1];
+      // Only reuse an already-open editor when we had none tracked (first open).
+      // Never fall back to a stale composer from the previous candidate.
+      if (allEditors.length > 0 && existing.size === 0) {
+        return pickBestComposerEditor(allEditors) || allEditors[allEditors.length - 1];
+      }
 
       await U.sleep(pollMs);
     }
     const allEditors = getAllComposerEditors();
-    const newEditor = allEditors.find((ed) => !existingEditorSet.has(ed));
+    const newEditor = allEditors.find((ed) => !existing.has(ed));
     if (newEditor) return newEditor;
-    if (allEditors.length) return allEditors[allEditors.length - 1];
+    if (existing.size === 0 && allEditors.length) {
+      return pickBestComposerEditor(allEditors) || allEditors[allEditors.length - 1];
+    }
     return null;
   }
 
@@ -1061,11 +1461,28 @@
     return null;
   }
 
-  function watchForMessageEditor(timeoutMs = 30000) {
-    const immediate = findAnyMessageEditorNow();
-    if (immediate) return Promise.resolve(immediate);
+  function watchForMessageEditor(timeoutMs = 30000, existingEditorSet = null) {
+    const existing = existingEditorSet || new Set();
+    // Do not resolve immediately with a composer that was already open —
+    // that is usually the previous candidate's bubble still on screen.
+    if (existing.size === 0) {
+      const immediate = findAnyMessageEditorNow();
+      if (immediate) return Promise.resolve(immediate);
+    }
 
-    return waitForMessageComposer(timeoutMs, 200);
+    return (async () => {
+      const started = Date.now();
+      while (Date.now() - started < timeoutMs) {
+        const editors = getAllComposerEditors();
+        const fresh = editors.find((ed) => !existing.has(ed));
+        if (fresh) return fresh;
+        if (existing.size === 0 && editors.length) {
+          return pickBestComposerEditor(editors) || editors[editors.length - 1];
+        }
+        await U.sleep(200);
+      }
+      return null;
+    })();
   }
 
   function findSendButton(root, editor) {
@@ -1261,22 +1678,84 @@
       ".msg-overlay-conversation-bubble--is-active",
       "div.msg-overlay-conversation-bubble[role='dialog']",
       "section.msg-overlay-conversation-bubble",
+      "div.msg-overlay-conversation-bubble",
       "div[role='dialog'][class*='msg-overlay']"
     ];
+    let hidAny = false;
     for (const doc of docs) {
       try {
         const root = doc.body || doc.documentElement || doc;
         for (const sel of overlaySelectors) {
-          const el = querySelectorIncludingShadow(root, sel);
-          if (el && el.getBoundingClientRect?.().width > 0) {
+          const nodes = querySelectorAllIncludingShadow(root, sel);
+          for (const el of nodes) {
+            if (!el || el.getAttribute("data-lhm-hidden") === "1") continue;
+            if (!(el.getBoundingClientRect?.().width > 0)) continue;
             el.setAttribute("data-lhm-hidden", "1");
             el.style.setProperty("display", "none", "important");
-            return true;
+            hidAny = true;
           }
         }
       } catch (_) {}
     }
-    return false;
+    return hidAny;
+  }
+
+  function listOpenMessageOverlayRoots() {
+    const roots = [];
+    const seen = new Set();
+    const docs = getSearchDocuments();
+    const selectors = [
+      "div.msg-overlay-conversation-bubble--is-active[role='dialog']",
+      "div.msg-overlay-conversation-bubble[role='dialog']",
+      "section.msg-overlay-conversation-bubble",
+      "div.msg-overlay-conversation-bubble",
+      "form.msg-form"
+    ];
+    for (const doc of docs) {
+      try {
+        const root = doc.body || doc.documentElement || doc;
+        for (const sel of selectors) {
+          for (const el of querySelectorAllIncludingShadow(root, sel)) {
+            if (!el || seen.has(el)) continue;
+            if (!isVisibleElement(el) && el.getAttribute("data-lhm-hidden") !== "1") continue;
+            // Prefer conversation bubbles; skip bare forms nested inside an already-listed bubble.
+            if (el.matches?.("form.msg-form") && el.closest(".msg-overlay-conversation-bubble")) continue;
+            seen.add(el);
+            roots.push(el);
+          }
+        }
+      } catch (_) {}
+    }
+    return roots;
+  }
+
+  function findOverlayCloseButton(overlayRoot) {
+    if (!overlayRoot) return null;
+    const headerControls =
+      querySelectorIncludingShadow(overlayRoot, ".msg-overlay-bubble-header__controls") ||
+      overlayRoot.querySelector?.(".msg-overlay-bubble-header__controls");
+    let closeBtn = getCloseButtonFromHeader(headerControls);
+    if (closeBtn) return closeBtn;
+
+    const buttons = Array.from(overlayRoot.querySelectorAll?.("button") || []).filter(isVisibleElement);
+    const ranked = buttons
+      .map((btn) => {
+        const aria = (btn.getAttribute("aria-label") || "").trim().toLowerCase();
+        const text = (btn.textContent || "").trim().toLowerCase();
+        const iconType =
+          btn.querySelector("svg[data-test-icon]")?.getAttribute("data-test-icon")?.toLowerCase() || "";
+        let score = 0;
+        if (aria.includes("close your conversation") || aria.includes("close your draft")) score += 30;
+        if (aria.includes("close conversation") || text.includes("close your conversation")) score += 25;
+        if (iconType.includes("close-small") || iconType.includes("close")) score += 15;
+        if (aria === "close" || text === "close") score += 8;
+        if (aria.includes("minimize") || text.includes("minimize")) score -= 20;
+        if (btn.closest(".msg-overlay-bubble-header__controls, .msg-overlay-bubble-header")) score += 5;
+        return { btn, score };
+      })
+      .filter((x) => x.score > 0)
+      .sort((a, b) => b.score - a.score);
+    return ranked[0]?.btn || null;
   }
 
   function findComposerCloseButton(container) {
@@ -1374,56 +1853,133 @@
     return hasThreadEvents;
   }
 
-  async function closeAnyOpenComposer(timeoutMs = 3500) {
-    const editor = findAnyMessageEditorNow();
-    const dialog = editor
-      ? editor.closest('div[role="dialog"]') ||
-        editor.closest("div.msg-overlay-conversation-bubble") ||
-        editor.closest("section.msg-overlay-conversation-bubble") ||
-        editor.closest("form.msg-form") ||
-        null
-      : document.querySelector(
-          'div.msg-overlay-conversation-bubble--is-active[role="dialog"], div.msg-overlay-conversation-bubble[role="dialog"], section.msg-overlay-conversation-bubble[role="dialog"], div[role="dialog"]'
+  async function closeAnyOpenComposer(timeoutMs = 5000) {
+    const started = Date.now();
+    let closedAll = true;
+
+    while (Date.now() - started < timeoutMs) {
+      const overlays = listOpenMessageOverlayRoots().filter(
+        (el) => el.getAttribute("data-lhm-hidden") !== "1" && isVisibleElement(el)
+      );
+      const editor = findAnyMessageEditorNow();
+      if (!overlays.length && !editor) return true;
+
+      for (const overlay of overlays) {
+        const closeBtn = findOverlayCloseButton(overlay);
+        if (closeBtn) {
+          forceClick(closeBtn);
+          clickDiscardDraftIfPrompted();
+        } else {
+          dispatchEscapeKey(overlay);
+          clickDiscardDraftIfPrompted();
+        }
+      }
+
+      if (editor && !overlays.length) {
+        const dialog =
+          editor.closest("div.msg-overlay-conversation-bubble") ||
+          editor.closest("section.msg-overlay-conversation-bubble") ||
+          editor.closest('div[role="dialog"]') ||
+          editor.closest("form.msg-form");
+        const closeBtn = findOverlayCloseButton(dialog) || findComposerCloseButton(dialog);
+        if (closeBtn) {
+          forceClick(closeBtn);
+          clickDiscardDraftIfPrompted();
+        } else {
+          dispatchEscapeKey(document.documentElement);
+          clickDiscardDraftIfPrompted();
+        }
+      }
+
+      await U.sleep(350);
+      const stillOpen =
+        listOpenMessageOverlayRoots().some(
+          (el) => el.getAttribute("data-lhm-hidden") !== "1" && isVisibleElement(el)
+        ) || Boolean(findAnyMessageEditorNow());
+      if (!stillOpen) return true;
+      closedAll = false;
+    }
+
+    // Force-hide leftovers so the next candidate is not blocked.
+    hideOverlayLastResort();
+    const leftover = findAnyMessageEditorNow();
+    if (leftover) {
+      const bubble =
+        leftover.closest("div.msg-overlay-conversation-bubble") ||
+        leftover.closest("section.msg-overlay-conversation-bubble") ||
+        leftover.closest('div[role="dialog"]');
+      if (bubble) {
+        bubble.setAttribute("data-lhm-hidden", "1");
+        bubble.style.setProperty("display", "none", "important");
+      }
+    }
+    return !findAnyMessageEditorNow() && closedAll
+      ? true
+      : !listOpenMessageOverlayRoots().some(
+          (el) => el.getAttribute("data-lhm-hidden") !== "1" && isVisibleElement(el)
         );
-    if (!dialog && !editor) return true;
-    return closeDialog(dialog, editor, timeoutMs);
   }
 
-  async function closeDialog(dialog, editor, timeoutMs = 5000) {
+  function hasOpenComposer() {
+    if (findAnyMessageEditorNow()) return true;
+    return listOpenMessageOverlayRoots().some(
+      (el) => el.getAttribute("data-lhm-hidden") !== "1" && isVisibleElement(el)
+    );
+  }
+
+  /** Close only when a composer is actually open (avoids extra delay on clean pages). */
+  async function closeOpenComposerIfNeeded(timeoutMs = 3500) {
+    if (!hasOpenComposer()) return true;
+    return closeAnyOpenComposer(timeoutMs);
+  }
+
+  /**
+   * Let LinkedIn settle, then close once. Force-close only if still open.
+   * Keeps Candidate Search multi-message reliability without closing too abruptly.
+   */
+  async function settleThenCloseComposer(dialog, editor) {
+    await U.sleep(U.randomInt(1000, 2000));
+    const closed = await closeDialog(dialog, editor, 5000);
+    if (closed && !hasOpenComposer()) return true;
+    log("Composer still open after settle+close; force-closing overlays.");
+    await closeAnyOpenComposer(3500);
+    return !hasOpenComposer();
+  }
+
+  async function closeDialog(dialog, editor, timeoutMs = 6000) {
     let container = resolveComposerContainer(dialog, editor);
     const started = Date.now();
     while (Date.now() - started < timeoutMs) {
       container = resolveComposerContainer(dialog, editor) || container;
       if (!isComposerStillOpen(container, dialog, editor)) return true;
 
-      dispatchEscapeKey(container?.ownerDocument?.documentElement || document.documentElement);
-      if (container) dispatchEscapeKey(container);
-      await U.sleep(100);
+      let closeBtn =
+        findOverlayCloseButton(container) ||
+        findComposerCloseButton(container) ||
+        findComposerCloseButtonInAllDocuments();
 
-      let closeBtn = findComposerCloseButton(container) || findComposerCloseButton(document);
-      if (!closeBtn) closeBtn = findComposerCloseButtonInAllDocuments();
-      if (!closeBtn) closeBtn = findCloseButtonByAriaInAllDocuments();
+      if (!closeBtn) {
+        const ariaClose = findCloseButtonByAriaInAllDocuments();
+        const aria = (ariaClose?.getAttribute("aria-label") || "").toLowerCase();
+        // Avoid generic page "Close" (candidate details); only conversation/draft closes.
+        if (
+          ariaClose &&
+          (aria.includes("conversation") || aria.includes("draft") || aria.includes("message"))
+        ) {
+          closeBtn = ariaClose;
+        }
+      }
 
       if (closeBtn) {
         forceClick(closeBtn);
         clickDiscardDraftIfPrompted();
       } else {
-        const docs = getSearchDocuments();
-        for (const doc of docs) {
-          try {
-            const root = doc.body || doc.documentElement || doc;
-            const headerControls = querySelectorIncludingShadow(root, ".msg-overlay-bubble-header__controls");
-            const fallbackClose = getCloseButtonFromHeader(headerControls);
-            if (fallbackClose) {
-              forceClick(fallbackClose);
-              break;
-            }
-          } catch (_) {}
-        }
+        dispatchEscapeKey(container?.ownerDocument?.documentElement || document.documentElement);
+        if (container) dispatchEscapeKey(container);
         clickDiscardDraftIfPrompted();
       }
 
-      await U.sleep(350);
+      await U.sleep(400);
       if (!isComposerStillOpen(container, dialog, editor)) return true;
     }
 
@@ -1433,27 +1989,96 @@
     return !isComposerStillOpen(container, dialog, editor);
   }
 
+  /**
+   * Awareness API allows CORS (*). Prefer page-context fetch so we are not
+   * blocked when the MV3 service worker stalls (common with Cloudflare).
+   */
+  async function postVerifyName(url, name, timeoutMs = 12000) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+          Accept: "application/json"
+        },
+        body: new URLSearchParams({ name }).toString(),
+        signal: controller.signal,
+        credentials: "omit",
+        cache: "no-store"
+      });
+      if (!res.ok) {
+        return { ok: false, isAwareness: false, error: `HTTP ${res.status}` };
+      }
+      const data = await res.json();
+      return { ok: true, isAwareness: data?.response === true };
+    } catch (error) {
+      const aborted = error?.name === "AbortError";
+      return {
+        ok: false,
+        isAwareness: false,
+        error: aborted
+          ? `VERIFY_NAME timed out after ${timeoutMs}ms`
+          : error?.message || "VERIFY_NAME request failed."
+      };
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /**
+   * @returns {Promise<{ verified: boolean, apiError: string|null }>}
+   */
   async function verifyNameForAwareness(applicantName) {
     const name = String(applicantName || "").trim();
-    if (!name || name === "Candidate") return false;
+    if (!name || name === "Candidate") {
+      return { verified: false, apiError: null };
+    }
+
+    let apiUrl = null;
+    try {
+      const meta = await chrome.runtime.sendMessage({ type: "GET_VERIFY_NAME_URL" });
+      if (meta?.ok && meta.url) apiUrl = meta.url;
+    } catch (_) {}
+
+    if (apiUrl) {
+      let direct = await postVerifyName(apiUrl, name, 12000);
+      if (!direct.ok) {
+        await U.sleep(400);
+        direct = await postVerifyName(apiUrl, name, 12000);
+      }
+      if (direct.ok) {
+        return { verified: Boolean(direct.isAwareness), apiError: null };
+      }
+      log("VERIFY_NAME page fetch failed, falling back to background:", direct.error);
+    }
+
     try {
       const res = await chrome.runtime.sendMessage({
         type: "VERIFY_NAME",
         payload: { name }
       });
       if (!res?.ok) {
-        log("VERIFY_NAME failed:", res?.error || "unknown");
-        return false;
+        const apiError = res?.error || "unknown";
+        log("VERIFY_NAME failed:", apiError);
+        return { verified: false, apiError };
       }
-      return Boolean(res.isAwareness);
+      return { verified: Boolean(res.isAwareness), apiError: null };
     } catch (error) {
-      log("VERIFY_NAME request error:", error);
-      return false;
+      const apiError = error?.message || "VERIFY_NAME request error";
+      log("VERIFY_NAME request error:", apiError);
+      return { verified: false, apiError };
     }
   }
 
   async function processCandidate(card, index, state, sentMap) {
     assertNotStopped();
+
+    // Clear a leftover messaging overlay only if one is actually open.
+    try {
+      await closeOpenComposerIfNeeded(3500);
+    } catch (_) {}
 
     const cardName = getCandidateNameFromCard(card);
     await updateProgress({ currentCandidate: cardName, status: `Processing ${index + 1}` });
@@ -1476,7 +2101,11 @@
 
     const isAwarenessCampaign = state.campaignMode === "awareness";
     if (isAwarenessCampaign) {
-      const verified = await verifyNameForAwareness(cardName);
+      const { verified, apiError } = await verifyNameForAwareness(cardName);
+      if (apiError) {
+        // Don't treat API/network failures as "not in awareness list".
+        throw new Error(`Awareness API error: ${apiError}`);
+      }
       if (!verified) {
         log("Awareness mode: skipping unverified name:", cardName);
         return {
@@ -1503,12 +2132,14 @@
       throw new Error("Right panel did not load in time.");
     }
 
-    // Try direct Message button first (new layout with hiring-applicant-contact-message)
-    let directMessageBtn = document.querySelector('button[data-view-name="hiring-applicant-contact-message"]');
+    // Try direct Message action first (candidate search + classic message buttons)
+    let directMessageBtn =
+      findDirectSendMessageAction() ||
+      document.querySelector('button[data-view-name="hiring-applicant-contact-message"]');
     if (
       directMessageBtn &&
       (!isVisibleElement(directMessageBtn) ||
-        directMessageBtn.closest(".artdeco-dropdown__content-inner, .artdeco-dropdown__content"))
+        directMessageBtn.closest(".artdeco-dropdown__content-inner, .artdeco-dropdown__content, [role='menu']"))
     ) {
       directMessageBtn = null;
     }
@@ -1519,26 +2150,31 @@
 
       for (const root of headerRoots) {
         if (directMessageBtn) break;
-        const btns = Array.from(root.querySelectorAll('button, a[role="button"]'));
+        const btns = Array.from(root.querySelectorAll('button, a, a[role="button"]'));
         directMessageBtn = btns.find((btn) => {
           if (!isVisibleElement(btn)) return false;
-          if (btn.closest(".artdeco-dropdown__content-inner, .artdeco-dropdown__content")) return false;
+          if (btn.closest(".artdeco-dropdown__content-inner, .artdeco-dropdown__content, [role='menu']")) {
+            return false;
+          }
           const text = (btn.textContent || "").trim().toLowerCase();
           const aria = (btn.getAttribute("aria-label") || "").trim().toLowerCase();
           if (text === "message" || aria === "message" || aria.startsWith("message ")) return true;
           if (text === "send message" || aria === "send message") return true;
+          if (aria.startsWith("send a message")) return true;
           return false;
         }) || null;
       }
     }
 
-    // Visible Message button in applicant header only
+    // Visible Message control in header roots
     if (!directMessageBtn) {
       for (const root of getApplicantHeaderRoots()) {
-        const allBtns = Array.from(root.querySelectorAll('button, a[role="button"]'));
+        const allBtns = Array.from(root.querySelectorAll('button, a, a[role="button"]'));
         directMessageBtn = allBtns.find((btn) => {
           if (!isVisibleElement(btn)) return false;
-          if (btn.closest(".artdeco-dropdown__content-inner, .artdeco-dropdown__content")) return false;
+          if (btn.closest(".artdeco-dropdown__content-inner, .artdeco-dropdown__content, [role='menu']")) {
+            return false;
+          }
           const text = (btn.textContent || "").trim();
           if (text.toLowerCase() === "message") return true;
           return false;
@@ -1548,21 +2184,24 @@
     }
 
     let editor, dialog;
+    const pageKind = getPageKind();
 
-    if (directMessageBtn) {
+    if (pageKind === "applicants-hub") {
+      try {
+        editor = await openApplicantsHubComposer();
+      } catch (hubError) {
+        log("Applicants hub Contact→Message failed, trying shared fallbacks:", hubError?.message);
+        editor = null;
+      }
+    }
+
+    if (!editor && directMessageBtn) {
       log("Found direct Message button:", directMessageBtn.textContent?.trim());
-      const existingEditors = new Set(getAllComposerEditors());
-      const editorWatchPromise = watchForMessageEditor(30000);
-      directMessageBtn.click();
-      await U.sleep(U.randomInt(1000, 6000));
-
-      editor =
-        (await waitForEditorForCurrentApplicant(30000, 250, existingEditors)) ||
-        (await waitForLinkedInMessageTextbox(30000, 250)) ||
-        (await editorWatchPromise) ||
-        (await waitForMessageComposer(30000, 250));
-    } else {
-      const contactButton = await findContactButton();
+      editor = await clickMessageActionAndWaitForEditor(directMessageBtn);
+    } else if (!editor) {
+      const contactButton =
+        (pageKind === "applicants-hub" ? findApplicantsHubContactButton() : null) ||
+        (await findContactButton());
       if (!contactButton) {
         const fallback = await handleMissingContactMessage(cardName, candidateKey);
         if (fallback.skipped) return fallback;
@@ -1577,22 +2216,13 @@
           if (fallback.skipped) return fallback;
           editor = fallback.editor;
         } else {
-          const existingEditors = new Set(getAllComposerEditors());
-          const editorWatchPromise = watchForMessageEditor(30000);
           log(
             "Clicking message option:",
             messageOption.tagName,
             messageOption.getAttribute("href"),
             (messageOption.textContent || "").trim()
           );
-          messageOption.click();
-          await U.sleep(U.randomInt(1000, 6000));
-
-          editor =
-            (await waitForEditorForCurrentApplicant(30000, 250, existingEditors)) ||
-            (await waitForLinkedInMessageTextbox(30000, 250)) ||
-            (await editorWatchPromise) ||
-            (await waitForMessageComposer(30000, 250));
+          editor = await clickMessageActionAndWaitForEditor(messageOption);
         }
       }
     }
@@ -1671,6 +2301,13 @@
       jobTitle
     });
 
+    // Hiring/InMail composers sometimes require a subject before Send enables.
+    const subjectGuess =
+      (jobTitle && `Opportunity: ${jobTitle}`) ||
+      finalMessage.split("\n").map((l) => l.trim()).find(Boolean)?.slice(0, 80) ||
+      "Hello";
+    fillSubjectIfPresent(dialog, editor, subjectGuess);
+
     // Attempt to write the message with retries and delays between attempts.
     // LinkedIn's React/Lexical editor may need time to process DOM events.
     let writeSuccess = false;
@@ -1712,17 +2349,11 @@
     if (state.mode === "auto") {
       sendButton.click();
       await U.sleep(U.randomInt(1000, 6000));
-      const closed = await closeDialog(dialog, editor);
-      if (!closed) {
-        log("Composer did not close after send; continuing.");
-      }
+      await settleThenCloseComposer(dialog, editor);
       didSend = true;
     } else {
-      // Test mode: in non-auto mode, close composer without sending.
-      const closed = await closeDialog(dialog, editor);
-      if (!closed) {
-        log("Composer did not close in manual test mode; continuing.");
-      }
+      // Manual mode: fill for review, settle briefly, then close for the next person.
+      await settleThenCloseComposer(dialog, editor);
     }
 
     if (didSend) {
@@ -1746,16 +2377,42 @@
         return;
       }
 
+      const pageKind = getPageKind();
+      const wantedSource = state.pageSource === "candidates" ? "candidates" : "applicants";
+      const actualSource = pageKind === "candidates" ? "candidates" : "applicants";
+      if (wantedSource !== actualSource) {
+        const msg =
+          wantedSource === "candidates"
+            ? "Open Candidate Search tab (or switch popup Source to Applicants)"
+            : "Open Applicants tab (or switch popup Source to Candidate Search)";
+        await updateProgress({ status: msg, running: false });
+        await setStatePatch({ running: false });
+        return;
+      }
+
+      log("Starting automation on page kind:", pageKind, "campaign:", state.campaignMode);
+
       let sentMap = await getSentMap();
       let sentCount = Number(state.sentCount || 0);
       const maxPerSession = Number(state.maxPerSession || 25);
 
-      await updateProgress({ status: "Running" });
+      await updateProgress({
+        status: `Running (${
+          pageKind === "candidates"
+            ? "Candidate Search"
+            : pageKind === "applicants-hub"
+              ? "Applicants hub"
+              : "Applicants"
+        })`
+      });
 
       const cards = (await waitForCandidateCards()) || [];
       if (!cards.length) {
         await updateProgress({
-          status: "No applicants found (scroll list and retry)",
+          status:
+            pageKind === "candidates"
+              ? "No candidates found (scroll the list and retry)"
+              : "No applicants found (scroll list and retry)",
           running: false
         });
         await setStatePatch({ running: false });
@@ -1848,6 +2505,11 @@
         runtime.stopRequested = false;
         runAutomationLoop().catch((error) => log("RUN_AUTOMATION error:", error));
         sendResponse({ ok: true });
+        return;
+      }
+
+      if (message.type === "PING") {
+        sendResponse({ ok: true, pageKind: getPageKind() });
         return;
       }
 

@@ -7,6 +7,7 @@ const DEFAULT_STATE = {
   currentCandidate: "-",
   mode: "manual",
   campaignMode: "message",
+  pageSource: "applicants",
   template:
     "Hi {first_name}, thanks for applying for the {job_title} role. I would love to connect and share next steps.",
   awarenessTemplate:
@@ -67,6 +68,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           mode: message.payload?.mode === "auto" ? "auto" : "manual",
           campaignMode:
             message.payload?.campaignMode === "awareness" ? "awareness" : "message",
+          pageSource:
+            message.payload?.pageSource === "candidates" ? "candidates" : "applicants",
           template: message.payload?.template || DEFAULT_STATE.template,
           awarenessTemplate:
             message.payload?.awarenessTemplate || DEFAULT_STATE.awarenessTemplate,
@@ -88,7 +91,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const patch = {};
         if (typeof payload.sentCount === "number") patch.sentCount = payload.sentCount;
         if (typeof payload.status === "string") patch.status = payload.status;
-        if (typeof payload.currentCandidate === "string") patch.currentCandidate = payload.currentCandidate;
+        if (typeof payload.currentCandidate === "string") {
+          patch.currentCandidate = payload.currentCandidate;
+        }
         const state = await setState(patch);
         sendResponse({ ok: true, state });
         break;
@@ -101,6 +106,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         break;
       }
 
+      case "GET_VERIFY_NAME_URL": {
+        sendResponse({ ok: true, url: VERIFY_NAME_URL });
+        break;
+      }
+
       case "VERIFY_NAME": {
         const name = String(message.payload?.name || "").trim();
         if (!name) {
@@ -108,34 +118,52 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           break;
         }
 
-        try {
-          const form = new FormData();
-          form.append("name", name);
-
-          const res = await fetch(VERIFY_NAME_URL, {
-            method: "POST",
-            body: form
-          });
-
-          if (!res.ok) {
-            sendResponse({
+        const VERIFY_TIMEOUT_MS = 12000;
+        const attemptVerify = async () => {
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), VERIFY_TIMEOUT_MS);
+          try {
+            // Prefer urlencoded over FormData — more reliable in MV3 service workers.
+            const res = await fetch(VERIFY_NAME_URL, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+                Accept: "application/json"
+              },
+              body: new URLSearchParams({ name }).toString(),
+              signal: controller.signal,
+              credentials: "omit",
+              cache: "no-store"
+            });
+            if (!res.ok) {
+              return { ok: false, isAwareness: false, error: `HTTP ${res.status}` };
+            }
+            const data = await res.json();
+            return { ok: true, isAwareness: data?.response === true };
+          } catch (error) {
+            const aborted = error?.name === "AbortError";
+            return {
               ok: false,
               isAwareness: false,
-              error: `HTTP ${res.status}`
-            });
-            break;
+              error: aborted
+                ? `VERIFY_NAME timed out after ${VERIFY_TIMEOUT_MS}ms`
+                : error?.message || "VERIFY_NAME request failed."
+            };
+          } finally {
+            clearTimeout(timer);
           }
+        };
 
-          const data = await res.json();
-          sendResponse({ ok: true, isAwareness: data?.response === true });
-        } catch (error) {
-          console.error("[LHM][background] VERIFY_NAME failed:", error);
-          sendResponse({
-            ok: false,
-            isAwareness: false,
-            error: error?.message || "VERIFY_NAME request failed."
-          });
+        let result = await attemptVerify();
+        // Retry once for SW wake / transient network stalls (includes timeouts).
+        if (!result.ok) {
+          await new Promise((r) => setTimeout(r, 400));
+          result = await attemptVerify();
         }
+        if (!result.ok) {
+          console.error("[LHM][background] VERIFY_NAME failed:", result.error);
+        }
+        sendResponse(result);
         break;
       }
 

@@ -342,20 +342,31 @@
     setParagraphMarkup(element, text);
   }
 
-  // LinkedIn shows applicants at two URL patterns:
-  // 1) List (query): https://www.linkedin.com/hiring/applicants/?applicationId=...&jobId=...
-  // 2) Detail (path): https://www.linkedin.com/hiring/jobs/{jobId}/applicants/{applicantId}/detail/...
+  // LinkedIn hiring surfaces:
+  // A) Classic applicants: /hiring/jobs/{jobId}/applicants/{id}/detail/...
+  // B) Applicants hub:     /hiring/applicants/?applicationId=...&jobId=...
+  // C) Candidate search:   /hiring/candidates/?candidateId=...&jobId=...
   const APPLICANTS_LIST_URL_PREFIX = "https://www.linkedin.com/hiring/applicants/";
+  const CANDIDATES_URL_PREFIX = "https://www.linkedin.com/hiring/candidates/";
   const APPLICANTS_JOBS_PATH = "/hiring/jobs/";
   const APPLICANTS_PATH = "/applicants/";
   const APPLICANT_DETAIL_PATH = "/detail";
 
-  function isApplicantsPage() {
+  function isApplicantsHubPage() {
+    return window.location.href.startsWith(APPLICANTS_LIST_URL_PREFIX);
+  }
+
+  function isClassicApplicantsPage() {
     const url = window.location.href;
-    return (
-      url.startsWith(APPLICANTS_LIST_URL_PREFIX) ||
-      (url.includes(APPLICANTS_JOBS_PATH) && url.includes(APPLICANTS_PATH))
-    );
+    return url.includes(APPLICANTS_JOBS_PATH) && url.includes(APPLICANTS_PATH);
+  }
+
+  function isCandidatesPage() {
+    return window.location.href.startsWith(CANDIDATES_URL_PREFIX);
+  }
+
+  function isApplicantsPage() {
+    return isApplicantsHubPage() || isClassicApplicantsPage();
   }
 
   function isApplicantDetailPage() {
@@ -365,6 +376,18 @@
       url.includes(APPLICANTS_PATH) &&
       url.includes(APPLICANT_DETAIL_PATH)
     );
+  }
+
+  function isSupportedHiringPage() {
+    return isApplicantsPage() || isCandidatesPage();
+  }
+
+  /** @returns {"classic-applicants"|"applicants-hub"|"candidates"|null} */
+  function getHiringPageKind() {
+    if (isCandidatesPage()) return "candidates";
+    if (isApplicantsHubPage()) return "applicants-hub";
+    if (isClassicApplicantsPage()) return "classic-applicants";
+    return null;
   }
 
   window.LinkedInHiringUtils = {
@@ -380,6 +403,11 @@
     writeMessageToEditor,
     setContentEditableText,
     isApplicantsPage,
-    isApplicantDetailPage
+    isApplicantsHubPage,
+    isClassicApplicantsPage,
+    isCandidatesPage,
+    isApplicantDetailPage,
+    isSupportedHiringPage,
+    getHiringPageKind
   };
 })();

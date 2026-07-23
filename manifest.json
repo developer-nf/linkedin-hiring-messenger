@@ -1,11 +1,12 @@
 {
   "manifest_version": 3,
   "name": "LinkedIn Hiring Messenger",
-  "version": "3.0.0",
-  "description": "Helps recruiters message LinkedIn applicants with safe, review-friendly automation.",
+  "version": "4.0.3",
+  "description": "Helps recruiters message LinkedIn Normal and Classical Mode hiring profiles with safe, review-friendly automation.",
   "permissions": ["storage", "activeTab", "scripting"],
   "host_permissions": [
     "https://www.linkedin.com/*",
+    "https://nikahforever.com/*",
     "http://64.227.130.94/*"
   ],
   "background": {
@@ -16,7 +17,8 @@
     {
       "matches": [
         "https://www.linkedin.com/hiring/applicants/*",
-        "https://www.linkedin.com/hiring/jobs/*/applicants/*"
+        "https://www.linkedin.com/hiring/jobs/*/applicants/*",
+        "https://www.linkedin.com/hiring/candidates/*"
       ],
       "js": ["utils.js", "content.js"],
       "run_at": "document_idle"

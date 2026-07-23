@@ -28,9 +28,21 @@
         <textarea
           id="awarenessTemplate"
           rows="5"
-          placeholder="Hi {first_name}, ..."
+          placeholder="Hi {first_name}, thanks for applying for the {job_title} role..."
         ></textarea>
         <p class="hint">Used in Awareness Mode (only when API returns true). Same placeholders as above.</p>
+      </section>
+
+      <section class="card">
+        <div class="toggle-row">
+          <span>Normal</span>
+          <input id="sourceApplicants" type="checkbox" checked />
+        </div>
+        <div class="toggle-row">
+          <span>Classical Mode</span>
+          <input id="sourceCandidates" type="checkbox" />
+        </div>
+        <p class="hint">Pick Normal or Classical Mode to match the LinkedIn tab you have open, then Start.</p>
       </section>
 
       <section class="card">
@@ -42,15 +54,15 @@
           <span>Awareness Mode</span>
           <input id="awarenessCampaignMode" type="checkbox" />
         </div>
-        <p class="hint">Message Mode: all applicants. Awareness Mode: only API-verified names.</p>
+        <p class="hint">Message Mode: all people in the list. Awareness Mode: only API-verified names.</p>
       </section>
 
-      <section class="card">
+      <section class="card" id="notAFitSection">
         <div class="toggle-row">
-          <span>Message Not a fit applicants</span>
+          <span>Message Not a fit</span>
           <input id="sendToNotAFit" type="checkbox" />
         </div>
-        <p class="hint">When off, Not a fit profiles are skipped. When on, opens More… → Message for those applicants.</p>
+        <p class="hint">Normal only. When off, Not a fit profiles are skipped. When on, opens More… → Message.</p>
       </section>
 
       <section class="card">

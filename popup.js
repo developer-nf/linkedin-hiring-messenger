@@ -11,9 +11,12 @@ const STORAGE_KEYS = {
 const els = {
   template: document.getElementById("template"),
   awarenessTemplate: document.getElementById("awarenessTemplate"),
+  sourceApplicants: document.getElementById("sourceApplicants"),
+  sourceCandidates: document.getElementById("sourceCandidates"),
   messageCampaignMode: document.getElementById("messageCampaignMode"),
   awarenessCampaignMode: document.getElementById("awarenessCampaignMode"),
   sendToNotAFit: document.getElementById("sendToNotAFit"),
+  notAFitSection: document.getElementById("notAFitSection"),
   manualMode: document.getElementById("manualMode"),
   autoMode: document.getElementById("autoMode"),
   sentCount: document.getElementById("sentCount"),
@@ -35,6 +38,7 @@ async function getState() {
       currentCandidate: "-",
       mode: "manual",
       campaignMode: "message",
+      pageSource: "applicants",
       template: DEFAULT_TEMPLATE,
       awarenessTemplate: DEFAULT_AWARENESS_TEMPLATE,
       maxPerSession: 25,
@@ -43,9 +47,34 @@ async function getState() {
   );
 }
 
+function getPageSource() {
+  return els.sourceCandidates.checked ? "candidates" : "applicants";
+}
+
+function lockPageSources(changed) {
+  if (changed === "applicants" && els.sourceApplicants.checked) {
+    els.sourceCandidates.checked = false;
+  }
+  if (changed === "candidates" && els.sourceCandidates.checked) {
+    els.sourceApplicants.checked = false;
+  }
+  if (!els.sourceApplicants.checked && !els.sourceCandidates.checked) {
+    els.sourceApplicants.checked = true;
+  }
+  updateNotAFitVisibility();
+}
+
+function updateNotAFitVisibility() {
+  if (!els.notAFitSection) return;
+  els.notAFitSection.style.display = getPageSource() === "candidates" ? "none" : "";
+}
+
 function renderState(state) {
   els.template.value = state.template || DEFAULT_TEMPLATE;
   els.awarenessTemplate.value = state.awarenessTemplate || DEFAULT_AWARENESS_TEMPLATE;
+  const pageSource = state.pageSource === "candidates" ? "candidates" : "applicants";
+  els.sourceApplicants.checked = pageSource !== "candidates";
+  els.sourceCandidates.checked = pageSource === "candidates";
   els.messageCampaignMode.checked = state.campaignMode !== "awareness";
   els.awarenessCampaignMode.checked = state.campaignMode === "awareness";
   els.sendToNotAFit.checked = Boolean(state.sendToNotAFit);
@@ -54,6 +83,7 @@ function renderState(state) {
   els.sentCount.textContent = String(state.sentCount || 0);
   els.candidateName.textContent = state.currentCandidate || "-";
   els.runState.textContent = state.status || (state.running ? "Running" : "Stopped");
+  updateNotAFitVisibility();
 }
 
 async function updateStatePatch(patch) {
@@ -61,18 +91,6 @@ async function updateStatePatch(patch) {
   const next = { ...prev, ...patch };
   await chrome.storage.local.set({ [STORAGE_KEYS.state]: next });
   return next;
-}
-
-async function getApplicantsTab() {
-  const tabs = await chrome.tabs.query({
-    url: [
-      "https://www.linkedin.com/hiring/applicants/*",
-      "https://www.linkedin.com/hiring/jobs/*/applicants/*"
-    ],
-    active: true,
-    currentWindow: true
-  });
-  return tabs[0] || null;
 }
 
 async function sendToContent(tabId, message) {
@@ -107,10 +125,75 @@ function getCampaignMode() {
   return els.awarenessCampaignMode.checked ? "awareness" : "message";
 }
 
+async function getActiveHiringTab() {
+  const tabs = await chrome.tabs.query({
+    active: true,
+    currentWindow: true,
+    url: [
+      "https://www.linkedin.com/hiring/candidates/*",
+      "https://www.linkedin.com/hiring/applicants/*",
+      "https://www.linkedin.com/hiring/jobs/*/applicants/*"
+    ]
+  });
+  return tabs[0] || null;
+}
+
+function detectPageSourceFromUrl(url) {
+  const value = String(url || "");
+  if (value.includes("/hiring/candidates/")) return "candidates";
+  if (value.includes("/hiring/applicants/") || value.includes("/hiring/jobs/")) return "applicants";
+  return null;
+}
+
+async function ensureContentScript(tabId) {
+  try {
+    await chrome.tabs.sendMessage(tabId, { type: "PING" });
+    return true;
+  } catch (_error) {
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId },
+        files: ["utils.js", "content.js"]
+      });
+      // Give the script a moment to register listeners.
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      await chrome.tabs.sendMessage(tabId, { type: "PING" });
+      return true;
+    } catch (injectError) {
+      console.error("[LHM][popup] Failed to inject content script:", injectError);
+      return false;
+    }
+  }
+}
+
 async function startMessaging() {
-  const tab = await getApplicantsTab();
+  // Prefer the active hiring tab URL so Candidate Search works when that page is open.
+  const tab = await getActiveHiringTab();
   if (!tab?.id) {
-    els.runState.textContent = "Open LinkedIn applicants tab first";
+    els.runState.textContent = "Open Classical Mode or Normal tab first";
+    return;
+  }
+
+  const detected = detectPageSourceFromUrl(tab.url);
+  if (!detected) {
+    els.runState.textContent = "Open a LinkedIn hiring Classical Mode or Normal page";
+    return;
+  }
+
+  // Sync popup source to the open page (Candidates is primary when that tab is active).
+  if (detected === "candidates") {
+    els.sourceCandidates.checked = true;
+    els.sourceApplicants.checked = false;
+  } else {
+    els.sourceApplicants.checked = true;
+    els.sourceCandidates.checked = false;
+  }
+  updateNotAFitVisibility();
+
+  const pageSource = detected;
+  const injected = await ensureContentScript(tab.id);
+  if (!injected) {
+    els.runState.textContent = "Reload the LinkedIn tab, then Start again";
     return;
   }
 
@@ -125,9 +208,10 @@ async function startMessaging() {
     payload: {
       mode,
       campaignMode,
+      pageSource,
       template,
       awarenessTemplate,
-      sendToNotAFit: els.sendToNotAFit.checked
+      sendToNotAFit: pageSource === "applicants" ? els.sendToNotAFit.checked : false
     }
   });
   if (!startResponse?.ok) {
@@ -135,13 +219,18 @@ async function startMessaging() {
     return;
   }
 
-  await sendToContent(tab.id, { type: "RUN_AUTOMATION" });
+  try {
+    await sendToContent(tab.id, { type: "RUN_AUTOMATION" });
+  } catch (_error) {
+    els.runState.textContent = "Reload the LinkedIn tab and try again";
+    return;
+  }
   await refresh();
 }
 
 async function stopMessaging() {
   await chrome.runtime.sendMessage({ type: "STOP_AUTOMATION" });
-  const tab = await getApplicantsTab();
+  const tab = await getActiveHiringTab();
   if (tab?.id) {
     await sendToContent(tab.id, { type: "STOP_AUTOMATION_NOW" }).catch(() => undefined);
   }
@@ -154,16 +243,17 @@ async function resetSentList() {
 }
 
 async function closeMessageModal() {
-  const tab = await getApplicantsTab();
+  const tab = await getActiveHiringTab();
   if (!tab?.id) {
-    els.runState.textContent = "Open LinkedIn applicants tab first";
+    els.runState.textContent = "Open Classical Mode or Normal tab first";
     return;
   }
   try {
+    await ensureContentScript(tab.id);
     const response = await sendToContent(tab.id, { type: "CLOSE_MESSAGE_MODAL" });
     els.runState.textContent = response?.ok ? "Modal close requested" : response?.error || "Close failed";
   } catch (err) {
-    els.runState.textContent = "Reload the applicants tab and try again";
+    els.runState.textContent = "Reload the LinkedIn tab and try again";
   }
   await refresh();
 }
@@ -171,15 +261,17 @@ async function closeMessageModal() {
 async function saveDraftSettings() {
   const mode = els.autoMode.checked ? "auto" : "manual";
   const campaignMode = getCampaignMode();
+  const pageSource = getPageSource();
   const template = (els.template.value || "").trim() || DEFAULT_TEMPLATE;
   const awarenessTemplate =
     (els.awarenessTemplate.value || "").trim() || DEFAULT_AWARENESS_TEMPLATE;
   await updateStatePatch({
     mode,
     campaignMode,
+    pageSource,
     template,
     awarenessTemplate,
-    sendToNotAFit: els.sendToNotAFit.checked
+    sendToNotAFit: pageSource === "applicants" ? els.sendToNotAFit.checked : false
   });
 }
 
@@ -189,6 +281,18 @@ async function refresh() {
 }
 
 function bindEvents() {
+  els.sourceApplicants.addEventListener("change", async () => {
+    lockPageSources("applicants");
+    await saveDraftSettings();
+    await refresh();
+  });
+
+  els.sourceCandidates.addEventListener("change", async () => {
+    lockPageSources("candidates");
+    await saveDraftSettings();
+    await refresh();
+  });
+
   els.messageCampaignMode.addEventListener("change", async () => {
     lockCampaignModes("message");
     await saveDraftSettings();
