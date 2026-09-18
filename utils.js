@@ -342,31 +342,18 @@
     setParagraphMarkup(element, text);
   }
 
-  // LinkedIn hiring surfaces:
-  // A) Classic applicants: /hiring/jobs/{jobId}/applicants/{id}/detail/...
-  // B) Applicants hub:     /hiring/applicants/?applicationId=...&jobId=...
-  // C) Candidate search:   /hiring/candidates/?candidateId=...&jobId=...
-  const APPLICANTS_LIST_URL_PREFIX = "https://www.linkedin.com/hiring/applicants/";
-  const CANDIDATES_URL_PREFIX = "https://www.linkedin.com/hiring/candidates/";
+  // Classic job applicants only: /hiring/jobs/{jobId}/applicants/{id}/detail/...
   const APPLICANTS_JOBS_PATH = "/hiring/jobs/";
   const APPLICANTS_PATH = "/applicants/";
   const APPLICANT_DETAIL_PATH = "/detail";
-
-  function isApplicantsHubPage() {
-    return window.location.href.startsWith(APPLICANTS_LIST_URL_PREFIX);
-  }
 
   function isClassicApplicantsPage() {
     const url = window.location.href;
     return url.includes(APPLICANTS_JOBS_PATH) && url.includes(APPLICANTS_PATH);
   }
 
-  function isCandidatesPage() {
-    return window.location.href.startsWith(CANDIDATES_URL_PREFIX);
-  }
-
   function isApplicantsPage() {
-    return isApplicantsHubPage() || isClassicApplicantsPage();
+    return isClassicApplicantsPage();
   }
 
   function isApplicantDetailPage() {
@@ -379,13 +366,11 @@
   }
 
   function isSupportedHiringPage() {
-    return isApplicantsPage() || isCandidatesPage();
+    return isClassicApplicantsPage();
   }
 
-  /** @returns {"classic-applicants"|"applicants-hub"|"candidates"|null} */
+  /** @returns {"classic-applicants"|null} */
   function getHiringPageKind() {
-    if (isCandidatesPage()) return "candidates";
-    if (isApplicantsHubPage()) return "applicants-hub";
     if (isClassicApplicantsPage()) return "classic-applicants";
     return null;
   }
@@ -403,9 +388,7 @@
     writeMessageToEditor,
     setContentEditableText,
     isApplicantsPage,
-    isApplicantsHubPage,
     isClassicApplicantsPage,
-    isCandidatesPage,
     isApplicantDetailPage,
     isSupportedHiringPage,
     getHiringPageKind

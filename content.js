@@ -168,10 +168,6 @@
     if (href) {
       try {
         const url = new URL(href, window.location.origin);
-        const candidateId = url.searchParams.get("candidateId");
-        if (candidateId) return `${url.origin}/hiring/candidates/?candidateId=${candidateId}`;
-        const applicationId = url.searchParams.get("applicationId");
-        if (applicationId) return `${url.origin}/hiring/applicants/?applicationId=${applicationId}`;
         if (url.pathname.includes("/applicants/") && url.pathname.includes("/detail")) {
           return url.origin + url.pathname;
         }
@@ -203,49 +199,85 @@
     );
   }
 
+  function isUiChromeName(value) {
+    const text = normalizePersonText(value).toLowerCase();
+    if (!text) return true;
+    if (
+      /manage job/.test(text) ||
+      /^(message|contact|rate as|more|sort by|search by keyword|applicants?|closed)$/.test(text) ||
+      text.startsWith("sort by") ||
+      text.startsWith("search by") ||
+      text.startsWith("rate as") ||
+      text.startsWith("manage ")
+    ) {
+      return true;
+    }
+    return false;
+  }
+
+  function cleanPersonName(value) {
+    return normalizePersonText(value)
+      .replace(/’s application$/i, "")
+      .replace(/'s application$/i, "")
+      .replace(/,\s*verified profile/i, "")
+      .trim();
+  }
+
   function getCandidateNameFromCard(card) {
-    // Candidate search / applicants hub: name before "·" on the card link text
-    if (card.matches?.("a[href*='candidateId='], a[href*='applicationId=']")) {
-      const raw = (card.innerText || card.textContent || "").replace(/\s+/g, " ").trim();
-      const name = raw.split("·")[0].trim();
-      if (name) return name;
+    // Classic list card: people-card title only (avoid job top-card lockup)
+    const peopleTitle = card.querySelector?.(".artdeco-entity-lockup__title.hiring-people-card__title");
+    if (peopleTitle?.textContent?.trim()) {
+      const name = cleanPersonName(peopleTitle.textContent);
+      if (name && !isUiChromeName(name)) return name;
     }
 
-    const hubTitle = card.querySelector?.("p");
-    if (hubTitle?.textContent?.trim() && getPageKind() !== "classic-applicants") {
-      const maybe = hubTitle.textContent.trim().split("·")[0].trim();
-      if (maybe && maybe.split(" ").length >= 1 && maybe.length < 80) {
-        // Prefer lockup title below when present
-      }
+    // Selected list item title under hiring applicants list
+    const listTitle = card.closest?.("li.hiring-applicants__list-item")
+      ? card.querySelector?.(".artdeco-entity-lockup__title")
+      : null;
+    if (listTitle?.textContent?.trim()) {
+      const name = cleanPersonName(listTitle.textContent);
+      if (name && !isUiChromeName(name)) return name;
     }
 
-    // Classic / older layout: name from entity lockup title
-    const lockupTitle =
-      card.querySelector?.('.artdeco-entity-lockup__title.hiring-people-card__title') ||
-      card.querySelector?.('.artdeco-entity-lockup__title');
-    if (lockupTitle?.textContent?.trim()) return lockupTitle.textContent.trim();
+    // Detail panel header: "Name’s application"
+    const detailH1 = document.querySelector(
+      "#hiring-detail-root .hiring-applicant-header h1, .hiring-applicant-header h1"
+    );
+    if (detailH1?.textContent?.trim()) {
+      const fromHeader = cleanPersonName(detailH1.textContent);
+      if (fromHeader && !isUiChromeName(fromHeader)) return fromHeader;
+    }
 
     const ariaNameEl = Array.from(card.querySelectorAll?.("[aria-label]") || []).find((el) => {
-      const value = (el.getAttribute("aria-label") || "").trim();
-      if (!value) return false;
+      const value = cleanPersonName(el.getAttribute("aria-label") || "");
+      if (!value || isUiChromeName(value)) return false;
       if (value.toLowerCase().includes("view full profile")) return false;
-      return value.split(" ").length >= 2;
+      if (value.toLowerCase().includes("select applicant")) {
+        return true;
+      }
+      return value.split(" ").length >= 2 && looksLikePersonName(value.replace(/^select applicant\s+/i, ""));
     });
     if (ariaNameEl) {
-      const raw = ariaNameEl.getAttribute("aria-label") || "";
-      return raw.replace(/,\s*verified profile/i, "").trim();
+      const raw = cleanPersonName(ariaNameEl.getAttribute("aria-label") || "");
+      const fromSelect = raw.replace(/^select applicant\s+/i, "").trim();
+      if (fromSelect && !isUiChromeName(fromSelect)) return fromSelect;
     }
 
     const strongText = card.querySelector?.("strong");
-    if (strongText?.textContent?.trim()) return strongText.textContent.trim();
-    const spans = Array.from(card.querySelectorAll?.("span") || []);
-    const likely = spans.find((s) => (s.textContent || "").trim().split(" ").length >= 2);
-    if (likely?.textContent?.trim()) return likely.textContent.trim();
-    const paragraph = card.querySelector?.("p");
-    if (paragraph?.textContent?.trim()) {
-      return paragraph.textContent.trim().split("·")[0].trim();
+    if (strongText?.textContent?.trim()) {
+      const name = cleanPersonName(strongText.textContent);
+      if (name && !isUiChromeName(name) && looksLikePersonName(name)) return name;
     }
-    return likely?.textContent?.trim() || "Candidate";
+
+    const spans = Array.from(card.querySelectorAll?.("span") || []);
+    const likely = spans.find((s) => {
+      const name = cleanPersonName(s.textContent || "");
+      return name.split(" ").length >= 2 && !isUiChromeName(name) && looksLikePersonName(name);
+    });
+    if (likely?.textContent?.trim()) return cleanPersonName(likely.textContent);
+
+    return "Candidate";
   }
 
   function getCandidateStableId(card) {
@@ -272,6 +304,7 @@
   function isGenericComposerTitle(value) {
     const text = normalizePersonText(value).toLowerCase();
     if (!text) return true;
+    if (isUiChromeName(text)) return true;
     const blocked = [
       "new message",
       "message",
@@ -287,7 +320,7 @@
 
   function looksLikePersonName(value) {
     const text = normalizePersonText(value);
-    if (!text || isGenericComposerTitle(text)) return false;
+    if (!text || isGenericComposerTitle(text) || isUiChromeName(text)) return false;
     if (text.length < 2 || text.length > 80) return false;
     const words = text.split(" ").filter(Boolean);
     if (!words.length || words.length > 6) return false;
@@ -343,144 +376,35 @@
 
   function getSingleApplicantCardForDetailPage() {
     if (!U.isApplicantDetailPage()) return [];
-    const candidateSignal =
-      'a[href*="/in/"], a[href*="/talent/"], [role="button"][aria-label*="View full profile"], [data-test-applicant-name]';
     const detailRoot =
+      document.querySelector("#hiring-detail-root") ||
+      document.querySelector(".hiring-applicant-header")?.closest("#hiring-detail-root, main, section") ||
       document.querySelector("[data-test-applicant-details]") ||
-      document.querySelector('[data-view-name="hiring-applicant-details"]') ||
-      document.querySelector("main section") ||
-      document.querySelector("main");
+      document.querySelector('[data-view-name="hiring-applicant-details"]');
     if (!detailRoot) return [];
-    const withSignal = detailRoot.querySelector(candidateSignal);
-    if (!withSignal) return [];
-    const card =
-      withSignal.closest("[data-test-applicant-details]") ||
-      withSignal.closest('[data-view-name="hiring-applicant-details"]') ||
-      withSignal.closest("section") ||
-      withSignal.closest("[role='region']") ||
-      withSignal.closest("article") ||
-      detailRoot;
-    return card ? [card] : [];
-  }
 
-  function collectUniqueIdLinks(paramName) {
-    const seen = new Set();
-    const cards = [];
-    const anchors = Array.from(document.querySelectorAll(`a[href*="${paramName}="]`));
-    for (const anchor of anchors) {
-      if (!(anchor instanceof HTMLElement) || !isVisibleElement(anchor)) continue;
-      let id = "";
-      try {
-        id = new URL(anchor.href, window.location.origin).searchParams.get(paramName) || "";
-      } catch (_) {
-        continue;
-      }
-      if (!id || seen.has(id)) continue;
+    const listItem = document.querySelector(
+      "li.hiring-applicants__list-item.hiring-applicants-list-item--selected, li.hiring-applicants__list-item a.active"
+    )?.closest?.("li.hiring-applicants__list-item");
+    if (listItem) return [listItem];
 
-      const text = (anchor.innerText || anchor.textContent || "").replace(/\s+/g, " ").trim();
-      // Skip nav / utility links only. Do NOT filter on "qualifications" —
-      // Candidate Search cards often include "Meets most qualifications".
-      if (!text || /^(add a coworker|candidate search)$/i.test(text)) continue;
-      if (/add a coworker/i.test(text) && text.split(" ").length <= 4) continue;
-      if (text.split(" ").length < 2) continue;
-
-      // Prefer links that look like a person card (name · ...)
-      const namePart = text.split("·")[0].trim();
-      if (!namePart || namePart.length < 2 || namePart.length > 80) continue;
-
-      seen.add(id);
-      cards.push(anchor);
-    }
-    return cards;
-  }
-
-  function getCandidateSearchCards() {
-    return collectUniqueIdLinks("candidateId");
-  }
-
-  function getApplicantsHubCards() {
-    const byComponent = Array.from(
-      document.querySelectorAll('a[componentkey^="paginatedApplicantCard-"]')
-    ).filter((a) => isVisibleElement(a));
-    if (byComponent.length) {
-      const seen = new Set();
-      const cards = [];
-      for (const anchor of byComponent) {
-        let id = "";
-        try {
-          id = new URL(anchor.href, window.location.origin).searchParams.get("applicationId") || "";
-        } catch (_) {}
-        if (!id) id = (anchor.getAttribute("componentkey") || "").replace("paginatedApplicantCard-", "");
-        if (!id || seen.has(id)) continue;
-        const text = (anchor.innerText || "").replace(/\s+/g, " ").trim();
-        if (!text || text.split(" ").length < 2) continue;
-        if (/add a coworker/i.test(text)) continue;
-        // Real applicant cards usually look like "Name · …"
-        const namePart = text.split("·")[0].trim();
-        if (!namePart || namePart.length < 2 || namePart.length > 80) continue;
-        seen.add(id);
-        cards.push(anchor);
-      }
-      if (cards.length) return cards;
-    }
-    return collectUniqueIdLinks("applicationId");
+    const header = detailRoot.querySelector(".hiring-applicant-header") || detailRoot;
+    return header ? [header] : [];
   }
 
   function getCandidateCards() {
-    const kind = getPageKind();
-    if (kind === "candidates") return getCandidateSearchCards();
-    if (kind === "applicants-hub") return getApplicantsHubCards();
-
     // Classic layout: hiring applicants list items
-    const hiringListItems = Array.from(document.querySelectorAll('li.hiring-applicants__list-item'));
+    const hiringListItems = Array.from(document.querySelectorAll("li.hiring-applicants__list-item"));
     if (hiringListItems.length) {
       return hiringListItems.filter((li) => {
         const link = li.querySelector('a[href*="/applicants/"]');
-        const name = li.querySelector('.artdeco-entity-lockup__title');
+        const name = li.querySelector(
+          ".artdeco-entity-lockup__title.hiring-people-card__title, .artdeco-entity-lockup__title"
+        );
         return Boolean(link && name);
       });
     }
 
-    const listRoot = getApplicantListRoot();
-    if (listRoot) {
-      const directCandidates = Array.from(listRoot.querySelectorAll(':scope > [role="button"][tabindex="0"]'))
-        .filter((node) => {
-          if (!(node instanceof HTMLElement)) return false;
-          if (node.textContent?.toLowerCase().includes("load more")) return false;
-          return Boolean(node.querySelector('[role="button"][aria-label*="View full profile"]'));
-        });
-      if (directCandidates.length) return directCandidates;
-    }
-
-    const seen = new Set();
-    const cards = [];
-    const selectors = [
-      '[role="listitem"]',
-      '[role="option"]',
-      '[role="button"][tabindex="0"]',
-      'li[data-test-applicant-card]',
-      'li',
-      "article"
-    ];
-
-    for (const selector of selectors) {
-      const nodes = document.querySelectorAll(selector);
-      for (const node of nodes) {
-        if (!(node instanceof HTMLElement)) continue;
-        if (seen.has(node)) continue;
-        const hasCandidateSignal = Boolean(
-          node.querySelector(
-            'a[href*="/in/"], a[href*="/talent/"], [role="button"][aria-label*="View full profile"], [data-test-applicant-name], a[href*="/applicants/"][href*="/detail/"]'
-          )
-        );
-        if (!hasCandidateSignal) continue;
-
-        seen.add(node);
-        cards.push(node);
-      }
-    }
-
-    if (cards.length) return cards;
     return getSingleApplicantCardForDetailPage();
   }
 
@@ -498,15 +422,6 @@
   }
 
   async function openCandidateDetails(card) {
-    // Candidate search / applicants hub: the card itself is the selector link
-    if (
-      card.matches?.('a[href*="candidateId="], a[href*="applicationId="], a[componentkey^="paginatedApplicantCard-"]')
-    ) {
-      card.click();
-      await U.sleep(U.randomInt(1000, 6000));
-      return true;
-    }
-
     // Classic layout: click the hiring applicant link directly
     const hiringApplicantLink = card.querySelector('a[href*="/applicants/"][href*="/detail/"]');
     if (hiringApplicantLink) {
@@ -515,20 +430,10 @@
       return true;
     }
 
-    const hubLink =
-      card.querySelector?.('a[href*="applicationId="]') ||
-      card.querySelector?.('a[href*="candidateId="]');
-    if (hubLink) {
-      hubLink.click();
-      await U.sleep(U.randomInt(1000, 6000));
-      return true;
-    }
-
     const clickableSelectors = [
-      '[data-test-applicant-name]',
-      '[role="button"][aria-label*="View full profile"]',
+      ".hiring-people-card__title",
+      ".artdeco-entity-lockup__title",
       'a[href*="/in/"]',
-      'a[href*="/talent/"]',
       "strong",
       "h3",
       "h4"
@@ -571,8 +476,7 @@
 
     await U.observeForElement({
       root: document,
-      selector:
-        'a[href*="candidateId="], a[href*="applicationId="], a[componentkey^="paginatedApplicantCard-"], [data-testid="applicantListCollectionRef"] [role="button"][tabindex="0"], [role="listitem"], [role="option"], li[data-test-applicant-card], [data-test-applicant-name], li.hiring-applicants__list-item',
+      selector: "li.hiring-applicants__list-item",
       timeoutMs: 15000
     });
 
@@ -628,30 +532,34 @@
   }
 
   async function waitForRightPanelLoad() {
-    // Wait for contact/message actions or details section after card click.
+    // Wait for Message / Contact / applicant header (not bare [role=region]).
     const panel = await U.observeForElement({
       root: document,
       selector:
-        'a[aria-label^="Send a message"], a[href*="/messaging/compose"], button[data-view-name="hiring-applicant-contact"], button[data-view-name="hiring-applicant-contact-message"], button[aria-label*="Contact"], button[aria-label="Message"], [data-test-applicant-details], [role="region"], .hiring-applicant-header',
+        '#hiring-detail-root button[data-view-name="hiring-applicant-contact-message"], #hiring-detail-root button[data-view-name="hiring-applicant-contact"], #hiring-detail-root .hiring-applicant-header, button[data-view-name="hiring-applicant-contact-message"], button[data-view-name="hiring-applicant-contact"], .hiring-applicant-header',
       timeoutMs: 12000
     });
     if (panel) return true;
 
-    // Fallback: visible Message / Contact controls (classic + applicants hub)
-    const allBtns = Array.from(document.querySelectorAll("button, a"));
-    const msgBtn = allBtns.find((btn) => {
-      if (!isVisibleElement(btn)) return false;
-      const text = (btn.textContent || "").replace(/\s+/g, " ").trim().toLowerCase();
-      const aria = (btn.getAttribute("aria-label") || "").trim().toLowerCase();
-      return (
-        text === "message" ||
-        text === "contact" ||
-        aria.startsWith("send a message") ||
-        aria === "message" ||
-        aria === "contact"
-      );
-    });
-    return Boolean(msgBtn);
+    // Fallback: visible Message / Contact in the detail root
+    const roots = getApplicantHeaderRoots();
+    for (const root of roots) {
+      const allBtns = Array.from(root.querySelectorAll("button, a"));
+      const msgBtn = allBtns.find((btn) => {
+        if (!isVisibleElement(btn)) return false;
+        const text = (btn.textContent || "").replace(/\s+/g, " ").trim().toLowerCase();
+        const aria = (btn.getAttribute("aria-label") || "").trim().toLowerCase();
+        return (
+          text === "message" ||
+          text === "contact" ||
+          aria.startsWith("send a message") ||
+          aria === "message" ||
+          aria === "contact"
+        );
+      });
+      if (msgBtn) return true;
+    }
+    return false;
   }
 
   async function findContactButton() {
@@ -954,68 +862,12 @@
 
   function getApplicantHeaderRoots() {
     return [
+      document.querySelector("#hiring-detail-root .hiring-applicant-header"),
+      document.querySelector("#hiring-detail-root"),
       document.querySelector(".hiring-applicant-header"),
       document.querySelector("[data-test-applicant-details]"),
-      document.querySelector('[data-view-name="hiring-applicant-details"]'),
-      document.querySelector('[data-testid="applicant-detail"]'),
-      document.querySelector('[data-testid="applicantDetails"]'),
-      // Applicants hub: prefer the right-side detail column when present
-      document.querySelector('aside'),
-      document.querySelector('[role="complementary"]'),
-      document.querySelector("main section"),
-      document.querySelector("main")
+      document.querySelector('[data-view-name="hiring-applicant-details"]')
     ].filter(Boolean);
-  }
-
-  function findApplicantsHubContactButton() {
-    const roots = getApplicantHeaderRoots();
-    for (const root of roots) {
-      const buttons = Array.from(root.querySelectorAll("button")).filter(isVisibleElement);
-      const contact = buttons.find((btn) => {
-        const text = (btn.textContent || "").replace(/\s+/g, " ").trim().toLowerCase();
-        const aria = (btn.getAttribute("aria-label") || "").trim().toLowerCase();
-        return text === "contact" || aria === "contact" || aria.startsWith("contact ");
-      });
-      if (contact) return contact;
-    }
-
-    return (
-      Array.from(document.querySelectorAll("button")).find((btn) => {
-        if (!isVisibleElement(btn)) return false;
-        const text = (btn.textContent || "").replace(/\s+/g, " ").trim().toLowerCase();
-        return text === "contact";
-      }) || null
-    );
-  }
-
-  async function openApplicantsHubComposer() {
-    // Hub: Contact → menu → Message (compose link with jobApplicationUrn/subject).
-    const contactButton = findApplicantsHubContactButton() || (await findContactButton());
-    if (!contactButton) {
-      const direct = findDirectSendMessageAction();
-      if (direct && isVisibleElement(direct)) {
-        log("Applicants hub: using direct Message action");
-        return clickMessageActionAndWaitForEditor(direct);
-      }
-      throw new Error("Applicants hub Contact button not found.");
-    }
-
-    log("Applicants hub: clicking Contact");
-    contactButton.click();
-    await safeDelay();
-
-    const messageOption = await findMessageMenuOption();
-    if (!messageOption) {
-      throw new Error("Applicants hub Message option not found in Contact menu.");
-    }
-
-    log(
-      "Applicants hub: clicking Message in menu:",
-      messageOption.tagName,
-      messageOption.getAttribute("href"),
-      (messageOption.textContent || "").trim()
-    );
-    return clickMessageActionAndWaitForEditor(messageOption);
   }
 
   async function openMessageViaMoreMenu() {
@@ -2132,10 +1984,11 @@
       throw new Error("Right panel did not load in time.");
     }
 
-    // Try direct Message action first (candidate search + classic message buttons)
+    // Prefer Message button inside the hiring detail root
     let directMessageBtn =
-      findDirectSendMessageAction() ||
-      document.querySelector('button[data-view-name="hiring-applicant-contact-message"]');
+      document.querySelector(
+        '#hiring-detail-root button[data-view-name="hiring-applicant-contact-message"]'
+      ) || findDirectSendMessageAction();
     if (
       directMessageBtn &&
       (!isVisibleElement(directMessageBtn) ||
@@ -2144,64 +1997,34 @@
       directMessageBtn = null;
     }
 
-    // Fallback: find a standalone "Message" button by text/aria-label in the applicant header area
-    if (!directMessageBtn) {
-      const headerRoots = getApplicantHeaderRoots();
-
-      for (const root of headerRoots) {
-        if (directMessageBtn) break;
-        const btns = Array.from(root.querySelectorAll('button, a, a[role="button"]'));
-        directMessageBtn = btns.find((btn) => {
-          if (!isVisibleElement(btn)) return false;
-          if (btn.closest(".artdeco-dropdown__content-inner, .artdeco-dropdown__content, [role='menu']")) {
-            return false;
-          }
-          const text = (btn.textContent || "").trim().toLowerCase();
-          const aria = (btn.getAttribute("aria-label") || "").trim().toLowerCase();
-          if (text === "message" || aria === "message" || aria.startsWith("message ")) return true;
-          if (text === "send message" || aria === "send message") return true;
-          if (aria.startsWith("send a message")) return true;
-          return false;
-        }) || null;
-      }
-    }
-
-    // Visible Message control in header roots
+    // Fallback: standalone "Message" button by text/aria-label in the applicant header
     if (!directMessageBtn) {
       for (const root of getApplicantHeaderRoots()) {
-        const allBtns = Array.from(root.querySelectorAll('button, a, a[role="button"]'));
-        directMessageBtn = allBtns.find((btn) => {
-          if (!isVisibleElement(btn)) return false;
-          if (btn.closest(".artdeco-dropdown__content-inner, .artdeco-dropdown__content, [role='menu']")) {
-            return false;
-          }
-          const text = (btn.textContent || "").trim();
-          if (text.toLowerCase() === "message") return true;
-          return false;
-        }) || null;
         if (directMessageBtn) break;
+        const btns = Array.from(root.querySelectorAll('button, a, a[role="button"]'));
+        directMessageBtn =
+          btns.find((btn) => {
+            if (!isVisibleElement(btn)) return false;
+            if (btn.closest(".artdeco-dropdown__content-inner, .artdeco-dropdown__content, [role='menu']")) {
+              return false;
+            }
+            const text = (btn.textContent || "").trim().toLowerCase();
+            const aria = (btn.getAttribute("aria-label") || "").trim().toLowerCase();
+            if (text === "message" || aria === "message" || aria.startsWith("message ")) return true;
+            if (text === "send message" || aria === "send message") return true;
+            if (aria.startsWith("send a message")) return true;
+            return false;
+          }) || null;
       }
     }
 
     let editor, dialog;
-    const pageKind = getPageKind();
 
-    if (pageKind === "applicants-hub") {
-      try {
-        editor = await openApplicantsHubComposer();
-      } catch (hubError) {
-        log("Applicants hub Contact→Message failed, trying shared fallbacks:", hubError?.message);
-        editor = null;
-      }
-    }
-
-    if (!editor && directMessageBtn) {
+    if (directMessageBtn) {
       log("Found direct Message button:", directMessageBtn.textContent?.trim());
       editor = await clickMessageActionAndWaitForEditor(directMessageBtn);
-    } else if (!editor) {
-      const contactButton =
-        (pageKind === "applicants-hub" ? findApplicantsHubContactButton() : null) ||
-        (await findContactButton());
+    } else {
+      const contactButton = await findContactButton();
       if (!contactButton) {
         const fallback = await handleMissingContactMessage(cardName, candidateKey);
         if (fallback.skipped) return fallback;
@@ -2362,7 +2185,7 @@
       return { skipped: false, sent: true, profileUrl: candidateKey, cardName };
     }
 
-    return { skipped: false, sent: false, profileUrl: candidateKey, cardName };
+    return { skipped: false, sent: false, drafted: true, profileUrl: candidateKey, cardName };
   }
 
   async function runAutomationLoop() {
@@ -2378,41 +2201,27 @@
       }
 
       const pageKind = getPageKind();
-      const wantedSource = state.pageSource === "candidates" ? "candidates" : "applicants";
-      const actualSource = pageKind === "candidates" ? "candidates" : "applicants";
-      if (wantedSource !== actualSource) {
-        const msg =
-          wantedSource === "candidates"
-            ? "Open Candidate Search tab (or switch popup Source to Applicants)"
-            : "Open Applicants tab (or switch popup Source to Candidate Search)";
-        await updateProgress({ status: msg, running: false });
+      if (pageKind !== "classic-applicants") {
+        await updateProgress({
+          status: "Open a job applicants page (/hiring/jobs/.../applicants/...)",
+          running: false
+        });
         await setStatePatch({ running: false });
         return;
       }
 
-      log("Starting automation on page kind:", pageKind, "campaign:", state.campaignMode);
+      log("Starting automation on classic applicants, campaign:", state.campaignMode);
 
       let sentMap = await getSentMap();
       let sentCount = Number(state.sentCount || 0);
       const maxPerSession = Number(state.maxPerSession || 25);
 
-      await updateProgress({
-        status: `Running (${
-          pageKind === "candidates"
-            ? "Candidate Search"
-            : pageKind === "applicants-hub"
-              ? "Applicants hub"
-              : "Applicants"
-        })`
-      });
+      await updateProgress({ status: "Running (Applicants)" });
 
       const cards = (await waitForCandidateCards()) || [];
       if (!cards.length) {
         await updateProgress({
-          status:
-            pageKind === "candidates"
-              ? "No candidates found (scroll the list and retry)"
-              : "No applicants found (scroll list and retry)",
+          status: "No applicants found (scroll list and retry)",
           running: false
         });
         await setStatePatch({ running: false });
@@ -2455,6 +2264,11 @@
               skipStatus = "Skipped: Not a fit (disabled)";
             }
             await updateProgress({ currentCandidate: result.cardName, status: skipStatus });
+          } else if (result.drafted) {
+            await updateProgress({
+              currentCandidate: result.cardName,
+              status: "Drafted (manual)"
+            });
           }
         } catch (error) {
           if (error?.code === "STOP_REQUESTED") throw error;

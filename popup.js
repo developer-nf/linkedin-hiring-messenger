@@ -8,15 +8,14 @@ const STORAGE_KEYS = {
   state: "lhm_state"
 };
 
+const JOBS_APPLICANTS_TAB_URL = "https://www.linkedin.com/hiring/jobs/*/applicants/*";
+
 const els = {
   template: document.getElementById("template"),
   awarenessTemplate: document.getElementById("awarenessTemplate"),
-  sourceApplicants: document.getElementById("sourceApplicants"),
-  sourceCandidates: document.getElementById("sourceCandidates"),
   messageCampaignMode: document.getElementById("messageCampaignMode"),
   awarenessCampaignMode: document.getElementById("awarenessCampaignMode"),
   sendToNotAFit: document.getElementById("sendToNotAFit"),
-  notAFitSection: document.getElementById("notAFitSection"),
   manualMode: document.getElementById("manualMode"),
   autoMode: document.getElementById("autoMode"),
   sentCount: document.getElementById("sentCount"),
@@ -47,34 +46,9 @@ async function getState() {
   );
 }
 
-function getPageSource() {
-  return els.sourceCandidates.checked ? "candidates" : "applicants";
-}
-
-function lockPageSources(changed) {
-  if (changed === "applicants" && els.sourceApplicants.checked) {
-    els.sourceCandidates.checked = false;
-  }
-  if (changed === "candidates" && els.sourceCandidates.checked) {
-    els.sourceApplicants.checked = false;
-  }
-  if (!els.sourceApplicants.checked && !els.sourceCandidates.checked) {
-    els.sourceApplicants.checked = true;
-  }
-  updateNotAFitVisibility();
-}
-
-function updateNotAFitVisibility() {
-  if (!els.notAFitSection) return;
-  els.notAFitSection.style.display = getPageSource() === "candidates" ? "none" : "";
-}
-
 function renderState(state) {
   els.template.value = state.template || DEFAULT_TEMPLATE;
   els.awarenessTemplate.value = state.awarenessTemplate || DEFAULT_AWARENESS_TEMPLATE;
-  const pageSource = state.pageSource === "candidates" ? "candidates" : "applicants";
-  els.sourceApplicants.checked = pageSource !== "candidates";
-  els.sourceCandidates.checked = pageSource === "candidates";
   els.messageCampaignMode.checked = state.campaignMode !== "awareness";
   els.awarenessCampaignMode.checked = state.campaignMode === "awareness";
   els.sendToNotAFit.checked = Boolean(state.sendToNotAFit);
@@ -83,7 +57,6 @@ function renderState(state) {
   els.sentCount.textContent = String(state.sentCount || 0);
   els.candidateName.textContent = state.currentCandidate || "-";
   els.runState.textContent = state.status || (state.running ? "Running" : "Stopped");
-  updateNotAFitVisibility();
 }
 
 async function updateStatePatch(patch) {
@@ -125,24 +98,18 @@ function getCampaignMode() {
   return els.awarenessCampaignMode.checked ? "awareness" : "message";
 }
 
+function isJobsApplicantsUrl(url) {
+  const value = String(url || "");
+  return value.includes("/hiring/jobs/") && value.includes("/applicants/");
+}
+
 async function getActiveHiringTab() {
   const tabs = await chrome.tabs.query({
     active: true,
     currentWindow: true,
-    url: [
-      "https://www.linkedin.com/hiring/candidates/*",
-      "https://www.linkedin.com/hiring/applicants/*",
-      "https://www.linkedin.com/hiring/jobs/*/applicants/*"
-    ]
+    url: [JOBS_APPLICANTS_TAB_URL]
   });
   return tabs[0] || null;
-}
-
-function detectPageSourceFromUrl(url) {
-  const value = String(url || "");
-  if (value.includes("/hiring/candidates/")) return "candidates";
-  if (value.includes("/hiring/applicants/") || value.includes("/hiring/jobs/")) return "applicants";
-  return null;
 }
 
 async function ensureContentScript(tabId) {
@@ -167,30 +134,12 @@ async function ensureContentScript(tabId) {
 }
 
 async function startMessaging() {
-  // Prefer the active hiring tab URL so Candidate Search works when that page is open.
   const tab = await getActiveHiringTab();
-  if (!tab?.id) {
-    els.runState.textContent = "Open Classical Mode or Normal tab first";
+  if (!tab?.id || !isJobsApplicantsUrl(tab.url)) {
+    els.runState.textContent = "Open a job applicants page (/hiring/jobs/.../applicants/...)";
     return;
   }
 
-  const detected = detectPageSourceFromUrl(tab.url);
-  if (!detected) {
-    els.runState.textContent = "Open a LinkedIn hiring Classical Mode or Normal page";
-    return;
-  }
-
-  // Sync popup source to the open page (Candidates is primary when that tab is active).
-  if (detected === "candidates") {
-    els.sourceCandidates.checked = true;
-    els.sourceApplicants.checked = false;
-  } else {
-    els.sourceApplicants.checked = true;
-    els.sourceCandidates.checked = false;
-  }
-  updateNotAFitVisibility();
-
-  const pageSource = detected;
   const injected = await ensureContentScript(tab.id);
   if (!injected) {
     els.runState.textContent = "Reload the LinkedIn tab, then Start again";
@@ -208,10 +157,10 @@ async function startMessaging() {
     payload: {
       mode,
       campaignMode,
-      pageSource,
+      pageSource: "applicants",
       template,
       awarenessTemplate,
-      sendToNotAFit: pageSource === "applicants" ? els.sendToNotAFit.checked : false
+      sendToNotAFit: els.sendToNotAFit.checked
     }
   });
   if (!startResponse?.ok) {
@@ -245,7 +194,7 @@ async function resetSentList() {
 async function closeMessageModal() {
   const tab = await getActiveHiringTab();
   if (!tab?.id) {
-    els.runState.textContent = "Open Classical Mode or Normal tab first";
+    els.runState.textContent = "Open a job applicants page (/hiring/jobs/.../applicants/...)";
     return;
   }
   try {
@@ -261,17 +210,16 @@ async function closeMessageModal() {
 async function saveDraftSettings() {
   const mode = els.autoMode.checked ? "auto" : "manual";
   const campaignMode = getCampaignMode();
-  const pageSource = getPageSource();
   const template = (els.template.value || "").trim() || DEFAULT_TEMPLATE;
   const awarenessTemplate =
     (els.awarenessTemplate.value || "").trim() || DEFAULT_AWARENESS_TEMPLATE;
   await updateStatePatch({
     mode,
     campaignMode,
-    pageSource,
+    pageSource: "applicants",
     template,
     awarenessTemplate,
-    sendToNotAFit: pageSource === "applicants" ? els.sendToNotAFit.checked : false
+    sendToNotAFit: els.sendToNotAFit.checked
   });
 }
 
@@ -281,18 +229,6 @@ async function refresh() {
 }
 
 function bindEvents() {
-  els.sourceApplicants.addEventListener("change", async () => {
-    lockPageSources("applicants");
-    await saveDraftSettings();
-    await refresh();
-  });
-
-  els.sourceCandidates.addEventListener("change", async () => {
-    lockPageSources("candidates");
-    await saveDraftSettings();
-    await refresh();
-  });
-
   els.messageCampaignMode.addEventListener("change", async () => {
     lockCampaignModes("message");
     await saveDraftSettings();

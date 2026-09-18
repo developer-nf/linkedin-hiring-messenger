@@ -68,8 +68,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           mode: message.payload?.mode === "auto" ? "auto" : "manual",
           campaignMode:
             message.payload?.campaignMode === "awareness" ? "awareness" : "message",
-          pageSource:
-            message.payload?.pageSource === "candidates" ? "candidates" : "applicants",
+          pageSource: "applicants",
           template: message.payload?.template || DEFAULT_STATE.template,
           awarenessTemplate:
             message.payload?.awarenessTemplate || DEFAULT_STATE.awarenessTemplate,
